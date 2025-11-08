@@ -1,0 +1,22 @@
+# Terraform files
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+
+# LocalStack data folder
+localstack-data/
+
+# AWS CLI cache
+.aws/
+
+# VS Code
+.vscode/
+
+# MacOS files
+.DS_Store
+
+# Windows files
+Thumbs.db
+
