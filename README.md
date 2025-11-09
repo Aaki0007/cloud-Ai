@@ -81,8 +81,6 @@ To store session state, model selection, and conversation context for each Teleg
 * `last_message_ts` → Timestamp of the last message
 * `status` → Active/closed session
 * `ollama_endpoint` → API endpoint for Ollama (e.g., `http://localhost:11434`)
-* `temperature` → Model temperature parameter
-* `max_tokens` → Maximum token limit for Ollama generation
 * `s3_path` → Path to archived session in S3
 
 ---
@@ -104,8 +102,6 @@ To store session state, model selection, and conversation context for each Teleg
 | last_message_ts                             |
 | status                                      |
 | ollama_endpoint                             |
-| temperature                                 |
-| max_tokens                                  |
 | s3_path                                     |
 +---------------------------------------------+
 ```
