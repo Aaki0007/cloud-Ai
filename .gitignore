@@ -20,3 +20,5 @@ localstack-data/
 # Windows files
 Thumbs.db
 
+# python
+package/
