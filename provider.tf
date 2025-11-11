@@ -4,6 +4,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    archive = {  # For Lambda zipping
+      source  = "hashicorp/archive"
+      version = "~> 2.2.0"
+    }
   }
   required_version = ">= 1.0.0"
 }
@@ -20,5 +24,6 @@ provider "aws" {
   endpoints {
     s3       = "http://localhost:4566"
     dynamodb = "http://localhost:4566"
+    lambda   = "http://localhost:4566"
   }
 }
