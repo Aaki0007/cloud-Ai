@@ -215,27 +215,7 @@ Default region name: us-east-1
 Default output format: json
 ```
 
-4. **Create `.env.tfvars` file** with your Telegram token:
-```bash
-cat > .env.tfvars << EOF
-telegram_token = "YOUR_TELEGRAM_BOT_TOKEN_HERE"
-EOF
-```
-
-Replace `YOUR_TELEGRAM_BOT_TOKEN_HERE` with your actual token from BotFather.
-
-> **⚠️ Important**: The `.env.tfvars` file contains sensitive information (your Telegram bot token). 
-> - This file is already added to `.gitignore` and should **never** be committed to version control
-> - Keep this file secure and do not share it
-> - If you accidentally expose your token, regenerate it immediately via BotFather
-
-To get your Telegram token:
-1. Open Telegram and search for `@BotFather`
-2. Create a new bot with `/newbot`
-3. Copy the token provided (format: `123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh`)
-4. Paste it into `.env.tfvars`
-
-5. **Prepare Lambda package** (required for Terraform to zip function):
+4. **Prepare Lambda package** (required for Terraform to zip function):
 ```bash
 # Clean up any existing package
 rm -rf package/ lambda_function.zip
@@ -250,13 +230,13 @@ pip install -r requirements.txt -t ./package
 cp handler.py package/
 ```
 
-6. **Initialize and apply Terraform**:
+5. **Initialize and apply Terraform** (pass your Telegram token):
 ```bash
 terraform init
-terraform apply -auto-approve -var-file=".env.tfvars"
+terraform apply -auto-approve -var="telegram_token=YOUR_TELEGRAM_BOT_TOKEN"
 ```
 
-Terraform will automatically load variables from `.env.tfvars`.
+Replace `YOUR_TELEGRAM_BOT_TOKEN` with your actual Telegram bot token from BotFather.
 
 6. **Test the Lambda function**:
 ```bash
