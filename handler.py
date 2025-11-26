@@ -105,6 +105,7 @@ def create_session(user_id: int, model_name: str = "llama3") -> Dict[str, Any]:
         'last_message_ts': now,
         'conversation': [],  # List of {"role": "user"/"assistant", "content": str, "ts": int}
         'user_id': user_id,
+        's3_path': '',  # Will store path when session is archived to S3
     }
     # Deactivate any existing active sessions
     existing_items = get_user_items(user_id)
@@ -181,27 +182,15 @@ def handle_command(cmd: str, payload: str, chat_id: int, user_id: int, update_id
 /listsessions - List your sessions
 /switch <number> - Switch to a session (e.g., /switch 1)
 /history - Show recent messages in current session
-/status - Check Ollama AI connection and models
-/echo <text> - Echo back text"""
+/status - Check system status (Ollama integration coming soon)
+/echo <text> - Echo back text
+
+Note: AI chat is not yet implemented."""
         send_message(chat_id, resp)
         return "help"
 
     if cmd == "/status":
-        try:
-            print(f"Checking Ollama status at {OLLAMA_URL}")
-            resp = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                models = data.get('models', [])
-                if models:
-                    model_list = "\n".join([f"- {m['name']}" for m in models])
-                    resp_msg = f"✅ Ollama connected! Available models:\n{model_list}"
-                else:
-                    resp_msg = "✅ Ollama connected, but no models pulled yet. Run `ollama pull <model>` on host."
-            else:
-                resp_msg = f"❌ Ollama API error: {resp.status_code}. Check if Ollama is running on host:11434."
-        except Exception as e:
-            resp_msg = f"❌ Ollama connection failed: {str(e)}. Ensure Ollama is running and accessible from Docker."
+        resp_msg = "⚠️ Ollama AI integration not yet implemented. Stay tuned!"
         send_message(chat_id, resp_msg)
         return "status"
 
@@ -255,15 +244,26 @@ def handle_command(cmd: str, payload: str, chat_id: int, user_id: int, update_id
 
     if cmd == "/history":
         session = get_current_session(user_id)
-        conv = session['conversation'][-5:]  # Last 5 messages
+        # Handle conversation - it might be a list or empty
+        conversation = session.get('conversation', [])
+        if isinstance(conversation, str):
+            # If stored as JSON string, parse it
+            try:
+                conversation = json.loads(conversation)
+            except:
+                conversation = []
+        
+        conv = conversation[-5:] if conversation else []  # Last 5 messages
         if not conv:
             send_message(chat_id, "No messages in this session yet.")
             return "no_history"
         msg = "Recent conversation:\n"
         for m in conv:
-            role = m['role'].capitalize()
-            content = (m['content'][:100] + "...") if len(m['content']) > 100 else m['content']
-            ts_str = time.strftime('%H:%M', time.localtime(m['ts']))
+            role = m.get('role', 'unknown').capitalize()
+            content = m.get('content', '')
+            content = (content[:100] + "...") if len(content) > 100 else content
+            ts = m.get('ts', int(time.time()))
+            ts_str = time.strftime('%H:%M', time.localtime(ts))
             msg += f"{role} ({ts_str}): {content}\n"
         send_message(chat_id, msg)
         return "history"
@@ -298,23 +298,21 @@ def handle_message(text: str, chat_id: int, user_id: int, update_id: int) -> str
         payload = parts[1] if len(parts) > 1 else ""
         return handle_command(cmd, payload, chat_id, user_id, update_id)
     else:
-        # Chat message: process with AI
+        # Chat message: AI not implemented yet, but store in conversation for testing
         session = get_current_session(user_id)
-        model = session['model_name']
         now = int(time.time())
+        
+        # Store user message
         user_msg = {"role": "user", "content": text, "ts": now}
         append_to_conversation(session, user_msg)
-
-        # Prepare messages for Ollama (exclude ts)
-        messages_for_ollama = [{"role": m['role'], "content": m['content']} for m in session['conversation']]
-
-        response = call_ollama(model, messages_for_ollama)
-
-        ass_msg = {"role": "assistant", "content": response, "ts": int(time.time())}
+        
+        # Send placeholder response and store it
+        placeholder_response = "🤖 AI is not yet implemented. Your message has been saved to the conversation history for testing."
+        ass_msg = {"role": "assistant", "content": placeholder_response, "ts": int(time.time())}
         append_to_conversation(session, ass_msg)
-        send_message(chat_id, response)
-
-        return "chat_message"
+        
+        send_message(chat_id, placeholder_response)
+        return "ai_not_ready"
 
 def lambda_handler(event, context):
     """Main Lambda handler. Process all pending messages from Telegram."""
@@ -432,4 +430,6 @@ def lambda_handler(event, context):
     except Exception as e:
         error_msg = f"Error: {str(e)}"
         print(error_msg)
-        return {"statusCode": 500, "body": error_msg}ssssssss
+        import traceback
+        traceback.print_exc()
+        return {"statusCode": 500, "body": error_msg}
