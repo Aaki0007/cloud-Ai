@@ -121,18 +121,18 @@ Current implementation stores everything in DynamoDB. S3 integration will be add
 │          chatbot-sessions (DynamoDB)             │
 ├──────────────────────────────────────────────────┤
 │ pk (N): <telegram_user_id>                       │
-│ sk (S): MODEL#<model_name>#SESSION#<session_id> │
+│ sk (S): MODEL#<model_name>#SESSION#<session_id>  │
 ├──────────────────────────────────────────────────┤
 │ Attributes:                                      │
-│ • user_id, chat_id, model_name, session_id      │
-│ • conversation (list of messages)               │
-│ • is_active (1 or 0), last_message_ts           │
-│ • s3_path (for archived sessions)               │
+│ • user_id, chat_id, model_name, session_id       │
+│ • conversation (list of messages)                │
+│ • is_active (1 or 0), last_message_ts            │
+│ • s3_path (for archived sessions)                │
 ├──────────────────────────────────────────────────┤
 │ GSI: model_index                                 │
-│   Hash: model_name | Range: session_id          │
+│   Hash: model_name | Range: session_id           │
 │ GSI: active_sessions_index                       │
-│   Hash: is_active | Range: last_message_ts      │
+│   Hash: is_active | Range: last_message_ts       │
 │ TTL: Enabled (attribute: ttl)                    │
 └──────────────────────────────────────────────────┘
 ```
