@@ -24,36 +24,35 @@ resource "aws_dynamodb_table" "chatbot_sessions" {
 
   attribute {
     name = "pk"
-    type = "N"  # Number (Telegram user ID)
+    type = "N"  # Telegram user ID
   }
 
   attribute {
     name = "sk"
-    type = "S"  # String (UUID or timestamp-based)
+    type = "S"  # Composite: SESSION#<id>, PROFILE, or MESSAGE#<id>
   }
 
-  # Attribute used by GSI
   attribute {
     name = "model_name"
-    type = "S"  # i.e., "gpt-4", "gpt-3.5-turbo"
+    type = "S"
   }
 
   attribute {
     name = "session_id"
-    type = "S"  # String (UUID or timestamp-based)
+    type = "S"
   }
 
   attribute {
     name = "is_active"
-    type = "N"  # Number: 1 = active, 0 = archived
+    type = "N"
   }
 
   attribute {
     name = "last_message_ts"
-    type = "N"  # Number (timestamp)
+    type = "N"
   }
 
-  # GSI 1: Query by model across all users
+  # GSI for querying by model across all users
   global_secondary_index {
     name            = "model_index"
     hash_key        = "model_name"
@@ -61,7 +60,7 @@ resource "aws_dynamodb_table" "chatbot_sessions" {
     projection_type = "ALL"
   }
 
-  # GSI 2: Query active sessions across all users
+  # GSI for querying active sessions across all users
   global_secondary_index {
     name            = "active_sessions_index"
     hash_key        = "is_active"
@@ -69,7 +68,7 @@ resource "aws_dynamodb_table" "chatbot_sessions" {
     projection_type = "ALL"
   }
 
-  # TTL: Automatically delete old archived sessions
+  # TTL for automatic cleanup
   ttl {
     attribute_name = "ttl"
     enabled        = true
@@ -77,7 +76,7 @@ resource "aws_dynamodb_table" "chatbot_sessions" {
 
   tags = {
     Project = "AI-Chatbot"
-    Purpose = "Track user sessions, model selection, and conversation metadata"
+    Purpose = "Store user sessions and conversation data"
     Env     = "local"
   }
 }
