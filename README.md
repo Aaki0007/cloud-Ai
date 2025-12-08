@@ -429,7 +429,7 @@ while true; do awslocal lambda invoke --function-name telegram-bot out.json >/de
 
 **With visible output:**
 ```bash
-while true; do awslocal lambda invoke --function-name telegram-bot out.json && cat out.json; sleep 1; done
+while true; do awslocal lambda invoke --function-name telegram-bot out.json && cat out.json | jq ; sleep 1; done
 ```
 
 **With timestamps:**
