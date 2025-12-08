@@ -2,7 +2,7 @@
 
 This project sets up a **local AWS-like environment** for running an AI chatbot using LocalStack and Terraform. It provisions **S3 buckets** for storing archived chat history and **DynamoDB tables** for managing user sessions and metadata. Users interact with the bot through **Telegram**.
 
-> **⚠️ Status**: Currently in development. Ollama AI integration (backend models) is not yet implemented. Session management, commands, and Telegram connectivity are functional.
+> **⚠️ Status**: Currently in development. Ollama AI integration (backend models) is not yet implemented. Session management, commands, archive features, and Telegram connectivity are functional.
 
 - - -
 ## Table of Contents
@@ -11,6 +11,7 @@ This project sets up a **local AWS-like environment** for running an AI chatbot 
 * [Architecture Overview](#architecture-overview)
 * [Current Features](#current-features)
 * [Data Storage](#data-storage)
+* [Archive System](#archive-system)
 * [DynamoDB Design](#dynamodb-design)
 * [Dependencies](#dependencies)
   * [Windows (Scoop)](#windows-scoop)
@@ -32,16 +33,18 @@ The project creates a Telegram bot that manages user sessions and stores interac
 - ✅ Telegram bot message polling
 - ✅ User session creation and management
 - ✅ Command handling (`/help`, `/newsession`, `/listsessions`, `/switch`, `/history`, `/echo`)
+- ✅ Archive system (`/archive`, `/listarchives`, `/export`, file import)
 - ✅ DynamoDB for live session storage
+- ✅ S3 for archived session storage
 - ⏳ Ollama integration (planned for next phase)
-- ⏳ S3 archival of completed sessions (planned)
 
 - - -
 ## Architecture Overview
 
 **Current Flow:**
 ```
-Telegram Bot → Lambda Handler → DynamoDB (Session Storage)
+Telegram Bot → Lambda Handler → DynamoDB (Active Sessions)
+                             → S3 (Archived Sessions)
 ```
 
 **Future Flow (with Ollama):**
@@ -52,9 +55,10 @@ Telegram Bot → Lambda Handler → Ollama API → DynamoDB + S3 (via LocalStack
 **Current Process:**
 1. Telegram user sends a message to the bot
 2. Lambda function polls for updates via `getUpdates`
-3. Message is processed (command or chat)
-4. Session data is stored in **DynamoDB**
-5. Response is sent back to Telegram
+3. Message is processed (command, chat, or file upload)
+4. Active session data is stored in **DynamoDB**
+5. Archived sessions are stored in **S3**
+6. Response is sent back to Telegram
 
 - - -
 ## Current Features
@@ -69,6 +73,11 @@ Users can interact with the bot using these commands:
 | `/listsessions` | List all user sessions | ✅ Working |
 | `/switch <number>` | Switch to a different session | ✅ Working |
 | `/history` | Show recent messages in session | ✅ Working |
+| `/archive` | List sessions available to archive | ✅ Working |
+| `/archive <number>` | Archive a specific session to S3 | ✅ Working |
+| `/listarchives` | List archived sessions | ✅ Working |
+| `/export <number>` | Export archive as JSON file | ✅ Working |
+| Send JSON file | Import archive from file | ✅ Working |
 | `/status` | Check Ollama connection | ⏳ Not implemented |
 | `/echo <text>` | Echo back text (test command) | ✅ Working |
 | Chat messages | Send to AI model | ⏳ Not implemented |
@@ -76,20 +85,73 @@ Users can interact with the bot using these commands:
 - - -
 ## Data Storage
 
-User data is stored in **DynamoDB** (`chatbot-sessions` table), not S3.
-
-**DynamoDB (Live Data):**
+### DynamoDB (Active Sessions)
 - User sessions with model selection
 - Conversation context and recent messages
-- Session status (active/archived)
+- Session status (active/inactive)
 - Timestamps and metadata
 
-**S3 (Planned - Future):**
-- Archived full chat transcripts (when sessions are completed or archived)
+### S3 (Archived Sessions)
+- Archived full chat transcripts
 - Historical logs for long-term storage
-- Cheaper storage for infrequently accessed data
+- Exportable/importable JSON format
+- User-isolated storage paths
 
-Current implementation stores everything in DynamoDB. S3 integration will be added when session archival is implemented.
+- - -
+## Archive System
+
+The archive system allows users to move sessions from DynamoDB to S3, export them as files, and import archives.
+
+### S3 Storage Structure
+```
+chatbot-conversations/
+└── archives/
+    └── {user_id}/
+        ├── {session_id_1}.json
+        ├── {session_id_2}.json
+        └── ...
+```
+
+Each archive JSON contains:
+```json
+{
+  "user_id": 123456789,
+  "session_id": "uuid-string",
+  "model_name": "llama3",
+  "conversation": [
+    {"role": "user", "content": "Hello!", "ts": 1234567890},
+    {"role": "assistant", "content": "Hi there!", "ts": 1234567891}
+  ],
+  "original_sk": "MODEL#llama3#SESSION#uuid",
+  "last_message_ts": 1234567891,
+  "archived_at": "2024-01-15T10:30:00Z",
+  "archive_version": "1.0"
+}
+```
+
+### Archive Workflow
+
+**Archiving a session:**
+1. User runs `/archive` to list available sessions
+2. User runs `/archive <number>` to archive specific session
+3. Session data is saved to S3 at `archives/{user_id}/{session_id}.json`
+4. Session is removed from DynamoDB
+
+**Exporting an archive:**
+1. User runs `/listarchives` to see archived sessions
+2. User runs `/export <number>` to download specific archive
+3. Bot sends JSON file via Telegram
+
+**Importing an archive:**
+1. User sends a JSON file to the bot
+2. Bot validates the JSON structure
+3. Archive is saved to S3 with a new session ID (prevents conflicts)
+4. Original metadata is preserved for reference
+
+### Data Isolation
+- Each user's archives are stored in their own S3 prefix: `archives/{user_id}/`
+- Imported archives receive new session IDs to prevent conflicts
+- Users can only access their own archives
 
 - - -
 ## DynamoDB Design
@@ -111,7 +173,7 @@ Current implementation stores everything in DynamoDB. S3 integration will be add
 | `model_name` | String | Selected model name |
 | `session_id` | String | UUID for the session |
 | `conversation` | List | Array of message objects `{role, content, ts}` |
-| `is_active` | Number | 1 = active, 0 = archived |
+| `is_active` | Number | 1 = active, 0 = inactive |
 | `last_message_ts` | Number | Unix timestamp of last message |
 | `s3_path` | String | S3 path when session is archived (empty initially) |
 
@@ -256,6 +318,9 @@ aws s3 ls --endpoint-url http://localhost:4566
 # List DynamoDB tables
 aws dynamodb list-tables --endpoint-url http://localhost:4566
 
+# List archived sessions for a user (replace USER_ID)
+aws s3 ls s3://chatbot-conversations/archives/USER_ID/ --endpoint-url http://localhost:4566
+
 # View Lambda logs
 awslocal logs tail /aws/lambda/telegram-bot --follow
 ```
@@ -275,7 +340,7 @@ rm -rf package/ lambda_function.zip
 * `main.tf` — Terraform resources (S3, DynamoDB, IAM, Lambda)
 * `outputs.tf` — Terraform outputs (resource names)
 * `requirements.txt` — Python dependencies (requests, boto3)
-* `handler.py` — Lambda handler (Telegram polling, session management, commands)
+* `handler.py` — Lambda handler (Telegram polling, session management, archive commands)
 * `scripts/demo.py` — Demo script for testing S3 and DynamoDB operations
 * `scripts/verify.sh` — Bash script to verify LocalStack health and resources
 * `.gitignore` — Git ignore file
@@ -314,6 +379,8 @@ bash scripts/verify.sh
 * **Docker permissions (Linux)**: Add your user to the `docker` group and re-login.
 * **Lambda invocation errors**: Verify the Telegram token is set correctly in `main.tf`.
 * **Telegram messages not received**: Check that the polling is working via Lambda logs.
+* **Archive import fails**: Ensure the JSON file has a valid `conversation` array field.
+* **S3 access errors**: Verify the S3 bucket exists with `aws s3 ls --endpoint-url http://localhost:4566`.
 
 - - -
 ## License
