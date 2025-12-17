@@ -1,71 +1,75 @@
-# LocalStack AI Chatbot Infrastructure Documentation
+# AWS Telegram Chatbot Infrastructure
 
-This project sets up a **local AWS-like environment** for running an AI chatbot using LocalStack and Terraform. It provisions **S3 buckets** for storing archived chat history and **DynamoDB tables** for managing user sessions and metadata. Users interact with the bot through **Telegram**.
+This project deploys a **Telegram chatbot** on AWS using Infrastructure as Code (Terraform). It provisions **S3 buckets** for storing archived chat history, **DynamoDB tables** for managing user sessions, **Lambda** for serverless processing, and **API Gateway** for real-time webhook integration with Telegram.
 
-> **⚠️ Status**: Currently in development. Ollama AI integration (backend models) is not yet implemented. Session management, commands, archive features, and Telegram connectivity are functional.
+> **⚠️ Status**: Currently in development. Ollama AI integration (backend models) is not yet implemented. Session management, commands, archive features, and Telegram connectivity are fully functional.
 
-- - -
+---
+
 ## Table of Contents
 
 * [Overview](#overview)
-* [Architecture Overview](#architecture-overview)
-* [Current Features](#current-features)
-* [Data Storage](#data-storage)
-* [Archive System](#archive-system)
-* [DynamoDB Design](#dynamodb-design)
-* [Dependencies](#dependencies)
-  * [Windows (Scoop)](#windows-scoop)
-  * [Fedora Linux (dnf)](#fedora-linux-dnf)
-  * [macOS (Homebrew)](#macos-homebrew)
-* [Setup Instructions](#setup-instructions)
-* [AWS CLI Tools](#aws-cli-tools)
-* [Running the Bot](#running-the-bot)
-* [Commands](#commands)
+* [Architecture](#architecture)
+* [Features](#features)
+* [Prerequisites](#prerequisites)
+* [AWS Academy Setup](#aws-academy-setup)
+* [Deployment](#deployment)
+* [Telegram Webhook Setup](#telegram-webhook-setup)
+* [Bot Commands](#bot-commands)
 * [Project Structure](#project-structure)
+* [Data Storage](#data-storage)
 * [Verification](#verification)
 * [Troubleshooting](#troubleshooting)
+* [Cleanup](#cleanup)
 * [License](#license)
 
-- - -
+---
+
 ## Overview
 
-The project creates a Telegram bot that manages user sessions and stores interaction data in LocalStack. The architecture separates session management from AI processing for flexibility during development.
+This project creates a serverless Telegram bot running on AWS. When users send messages to the bot, Telegram forwards them to an API Gateway endpoint, which triggers a Lambda function to process the message and respond.
 
-**Current Scope:**
-- ✅ Telegram bot message polling
+**Key Features:**
+- ✅ Real-time message handling via API Gateway webhook
 - ✅ User session creation and management
 - ✅ Command handling (`/help`, `/newsession`, `/listsessions`, `/switch`, `/history`, `/echo`)
 - ✅ Archive system (`/archive`, `/listarchives`, `/export`, file import)
 - ✅ DynamoDB for live session storage
 - ✅ S3 for archived session storage
-- ⏳ Ollama integration (planned for next phase)
+- ⏳ Ollama AI integration (planned for next phase)
 
-- - -
-## Architecture Overview
+---
 
-**Current Flow:**
+## Architecture
+
 ```
-Telegram Bot → Lambda Handler → DynamoDB (Active Sessions)
-                             → S3 (Archived Sessions)
+┌─────────────┐      ┌─────────────────┐      ┌────────────────┐
+│   Telegram  │─────▶│   API Gateway   │─────▶│     Lambda     │
+│    User     │◀─────│   (webhook)     │◀─────│  (handler.py)  │
+└─────────────┘      └─────────────────┘      └────────────────┘
+                                                      │
+                              ┌───────────────────────┴───────────────────────┐
+                              ▼                                               ▼
+                     ┌─────────────────┐                             ┌─────────────────┐
+                     │    DynamoDB     │                             │       S3        │
+                     │ (active sessions)│                             │ (archived chats)│
+                     └─────────────────┘                             └─────────────────┘
 ```
 
-**Future Flow (with Ollama):**
-```
-Telegram Bot → Lambda Handler → Ollama API → DynamoDB + S3 (via LocalStack)
-```
+**Flow:**
+1. User sends a message to the Telegram bot
+2. Telegram POSTs the update to API Gateway webhook URL
+3. API Gateway triggers Lambda function
+4. Lambda processes the message (command or chat)
+5. Active session data is stored/retrieved from **DynamoDB**
+6. Archived sessions are stored in **S3**
+7. Lambda sends response back to Telegram
 
-**Current Process:**
-1. Telegram user sends a message to the bot
-2. Lambda function polls for updates via `getUpdates`
-3. Message is processed (command, chat, or file upload)
-4. Active session data is stored in **DynamoDB**
-5. Archived sessions are stored in **S3**
-6. Response is sent back to Telegram
+---
 
-- - -
-## Current Features
+## Features
 
-Users can interact with the bot using these commands:
+### Bot Commands
 
 | Command | Purpose | Status |
 |---------|---------|--------|
@@ -80,463 +84,313 @@ Users can interact with the bot using these commands:
 | `/listarchives` | List archived sessions | ✅ Working |
 | `/export <number>` | Export archive as JSON file | ✅ Working |
 | Send JSON file | Import archive from file | ✅ Working |
-| `/status` | Check Ollama connection | ⏳ Not implemented |
+| `/status` | Check bot status | ✅ Working |
 | `/echo <text>` | Echo back text (test command) | ✅ Working |
 | Chat messages | Send to AI model | ⏳ Not implemented |
 
-- - -
-## Data Storage
+---
 
-### DynamoDB (Active Sessions)
-- User sessions with model selection
-- Conversation context and recent messages
-- Session status (active/inactive)
-- Timestamps and metadata
+## Prerequisites
 
-### S3 (Archived Sessions)
-- Archived full chat transcripts
-- Historical logs for long-term storage
-- Exportable/importable JSON format
-- User-isolated storage paths
+- **AWS Academy** Learner Lab access (or AWS account)
+- **Terraform** >= 1.0.0
+- **AWS CLI** configured with credentials
+- **Python 3.9+** with pip
+- **Telegram Bot Token** (from [@BotFather](https://t.me/botfather))
 
-- - -
-## Archive System
+---
 
-The archive system allows users to move sessions from DynamoDB to S3, export them as files, and import archives.
+## AWS Academy Setup
 
-### S3 Storage Structure
-```
-chatbot-conversations/
-└── archives/
-    └── {user_id}/
-        ├── {session_id_1}.json
-        ├── {session_id_2}.json
-        └── ...
-```
+### 1. Start the Lab
 
-Each archive JSON contains:
-```json
-{
-  "user_id": 123456789,
-  "session_id": "uuid-string",
-  "model_name": "llama3",
-  "conversation": [
-    {"role": "user", "content": "Hello!", "ts": 1234567890},
-    {"role": "assistant", "content": "Hi there!", "ts": 1234567891}
-  ],
-  "original_sk": "MODEL#llama3#SESSION#uuid",
-  "last_message_ts": 1234567891,
-  "archived_at": "2024-01-15T10:30:00Z",
-  "archive_version": "1.0"
-}
-```
+1. Open AWS Academy and navigate to **"Launch AWS Academy Learner Lab"**
+2. Click **Start Lab** and wait for the status to turn green
+3. Click **AWS Details** to view credentials
 
-### Archive Workflow
+### 2. Configure AWS CLI
 
-**Archiving a session:**
-1. User runs `/archive` to list available sessions
-2. User runs `/archive <number>` to archive specific session
-3. Session data is saved to S3 at `archives/{user_id}/{session_id}.json`
-4. Session is removed from DynamoDB
+Click **Show** next to "AWS CLI" in AWS Details and copy the credentials:
 
-**Exporting an archive:**
-1. User runs `/listarchives` to see archived sessions
-2. User runs `/export <number>` to download specific archive
-3. Bot sends JSON file via Telegram
-
-**Importing an archive:**
-1. User sends a JSON file to the bot
-2. Bot validates the JSON structure
-3. Archive is saved to S3 with a new session ID (prevents conflicts)
-4. Original metadata is preserved for reference
-
-### Data Isolation
-- Each user's archives are stored in their own S3 prefix: `archives/{user_id}/`
-- Imported archives receive new session IDs to prevent conflicts
-- Users can only access their own archives
-
-- - -
-## DynamoDB Design
-
-### Table Name
-`chatbot-sessions`
-
-### Keys
-* **Partition Key (`pk`)**: Type `N` (number) - Telegram user ID
-* **Sort Key (`sk`)**: Type `S` (string) - Either `MODEL#<model_name>#SESSION#<session_id>` for sessions, or `last_update_id` for bot state tracking
-
-### Attributes
-| Attribute | Type | Purpose |
-|-----------|------|---------|
-| `pk` | Number | Telegram user ID (partition key) |
-| `sk` | String | Session identifier (sort key) |
-| `user_id` | Number | Telegram user ID (denormalized) |
-| `chat_id` | String | Telegram chat ID |
-| `model_name` | String | Selected model name |
-| `session_id` | String | UUID for the session |
-| `conversation` | List | Array of message objects `{role, content, ts}` |
-| `is_active` | Number | 1 = active, 0 = inactive |
-| `last_message_ts` | Number | Unix timestamp of last message |
-| `s3_path` | String | S3 path when session is archived (empty initially) |
-
-### Table Structure
-```
-┌──────────────────────────────────────────────────┐
-│          chatbot-sessions (DynamoDB)             │
-├──────────────────────────────────────────────────┤
-│ pk (N): <telegram_user_id>                       │
-│ sk (S): MODEL#<model_name>#SESSION#<session_id>  │
-├──────────────────────────────────────────────────┤
-│ Attributes:                                      │
-│ • user_id, chat_id, model_name, session_id       │
-│ • conversation (list of messages)                │
-│ • is_active (1 or 0), last_message_ts            │
-│ • s3_path (for archived sessions)                │
-├──────────────────────────────────────────────────┤
-│ GSI: model_index                                 │
-│   Hash: model_name | Range: session_id           │
-│ GSI: active_sessions_index                       │
-│   Hash: is_active | Range: last_message_ts       │
-│ TTL: Enabled (attribute: ttl)                    │
-└──────────────────────────────────────────────────┘
-```
-
-- - -
-## Dependencies
-
-### Python Dependencies
-Install the AWS CLI local wrapper:
 ```bash
-pip install awscli-local
+# Edit credentials file
+nano ~/.aws/credentials
 ```
 
-### Windows (Scoop)
-
-Required tools:
-* Terraform
-* Docker
-* Docker Compose
-
-Install via Scoop:
-```powershell
-scoop install terraform docker docker-compose
+Paste the credentials:
+```ini
+[default]
+aws_access_key_id=ASIA...
+aws_secret_access_key=...
+aws_session_token=FwoGZX...
 ```
 
-### Fedora Linux (dnf)
+### 3. Verify Authentication
 
-Required tools:
-* Terraform
-* Docker
-* Docker Compose
-
-Install via dnf:
 ```bash
-sudo dnf install -y terraform awscli docker docker-compose
+aws sts get-caller-identity
 ```
 
-Enable and start Docker service:
+### 4. Get LabRole ARN
+
 ```bash
-sudo systemctl enable --now docker
+aws iam get-role --role-name LabRole --query 'Role.Arn' --output text
 ```
 
-### macOS (Homebrew)
+Output: `arn:aws:iam::ACCOUNT_ID:role/LabRole`
 
-Required tools:
-* Terraform
-* Docker
-* Docker Compose
+---
 
-Install via Homebrew:
-```bash
-brew install terraform docker docker-compose
-```
+## Deployment
 
-Ensure Docker Desktop or an alternative is running before starting LocalStack.
+### 1. Clone and Configure
 
-- - -
-## Setup Instructions
-
-1. **Clone the repository**:
 ```bash
 git clone https://github.com/Man2Dev/cloud-Ai.git
 cd cloud-Ai
-```
 
-2. **Start LocalStack** using Docker Compose:
-```bash
-docker compose up -d
-```
-
-3. **Configure AWS CLI**:
-```bash
-aws configure
-```
-
-Use placeholder credentials:
-```
-AWS Access Key ID: test
-AWS Secret Access Key: test
-Default region name: us-east-1
-Default output format: json
-```
-
-4. **Configure Telegram Token** (choose one method):
-
-**Option A: Using terraform.tfvars (Recommended)**
-```bash
-# Copy the example file
+# Create configuration file
 cp terraform.tfvars.example terraform.tfvars
-
-# Edit and add your token
-nano terraform.tfvars  # or use your preferred editor
 ```
 
-Set your token in `terraform.tfvars`:
+Edit `terraform.tfvars`:
 ```hcl
-telegram_token = "YOUR_TOKEN"
+telegram_token = "YOUR_TELEGRAM_BOT_TOKEN"
+lab_role_arn   = "arn:aws:iam::YOUR_ACCOUNT_ID:role/LabRole"
 ```
 
-**Option B: Using command line variable**
-```bash
-terraform apply -var="telegram_token=YOUR_TOKEN"
-```
+### 2. Build Lambda Package
 
-**Option C: Using environment variable**
 ```bash
-export TF_VAR_telegram_token="YOUR_TOKEN"
-terraform apply
-```
-
-5. **Prepare Lambda package** (required for Terraform to zip function):
-```bash
-# Clean up any existing package
+# Clean previous builds
 rm -rf package/ lambda_function.zip
 
 # Create package directory
 mkdir -p package
 
-# Install dependencies into package/
+# Install dependencies
 pip install -r requirements.txt -t ./package
 
-# Copy function code into package/
+# Copy handler
 cp handler.py package/
 ```
 
-6. **Initialize and apply Terraform**:
+### 3. Deploy with Terraform
+
 ```bash
+# Initialize Terraform
 terraform init
+
+# Preview changes
+terraform plan
+
+# Deploy
 terraform apply -auto-approve
 ```
 
-7. **Test the Lambda function**:
-```bash
-awslocal lambda invoke --function-name telegram-bot output.json && cat output.json
-```
+### 4. Note the Outputs
 
-- - -
-## AWS CLI Tools
+After deployment, Terraform will output:
+- `api_gateway_url` - Your webhook URL
+- `s3_bucket_name` - S3 bucket for archives
+- `dynamodb_table_name` - DynamoDB table name
+- `lambda_function_name` - Lambda function name
 
-This project uses LocalStack to emulate AWS services locally. There are two ways to interact with LocalStack:
+---
 
-### awslocal (Recommended)
+## Telegram Webhook Setup
 
-`awslocal` is a wrapper around the AWS CLI that automatically configures the endpoint URL for LocalStack. It's simpler and less error-prone.
+### Set the Webhook
 
-**Installation:**
-```bash
-pip install awscli-local
-```
-
-**Usage:**
-```bash
-# List S3 buckets
-awslocal s3 ls
-
-# List DynamoDB tables
-awslocal dynamodb list-tables
-
-# Invoke Lambda function
-awslocal lambda invoke --function-name telegram-bot output.json
-
-# Describe DynamoDB table
-awslocal dynamodb describe-table --table-name chatbot-sessions
-
-# List objects in S3 bucket
-awslocal s3 ls s3://chatbot-conversations/
-
-# Get Lambda function info
-awslocal lambda get-function --function-name telegram-bot
-```
-
-### aws (Standard AWS CLI)
-
-The standard AWS CLI requires manually specifying the LocalStack endpoint URL for every command.
-
-**Usage:**
-```bash
-# List S3 buckets
-aws s3 ls --endpoint-url http://localhost:4566
-
-# List DynamoDB tables
-aws dynamodb list-tables --endpoint-url http://localhost:4566
-
-# Invoke Lambda function
-aws lambda invoke --function-name telegram-bot output.json --endpoint-url http://localhost:4566
-
-# Describe DynamoDB table
-aws dynamodb describe-table --table-name chatbot-sessions --endpoint-url http://localhost:4566
-
-# List objects in S3 bucket
-aws s3 ls s3://chatbot-conversations/ --endpoint-url http://localhost:4566
-
-# Get Lambda function info
-aws lambda get-function --function-name telegram-bot --endpoint-url http://localhost:4566
-```
-
-### Comparison
-
-| Feature | awslocal | aws |
-|---------|----------|-----|
-| Endpoint configuration | Automatic | Manual (`--endpoint-url`) |
-| Command length | Shorter | Longer |
-| LocalStack-specific | Yes | No (works with real AWS too) |
-| Installation | `pip install awscli-local` | Included with AWS CLI |
-
-**Recommendation:** Use `awslocal` for LocalStack development. Use `aws` with `--endpoint-url` if you need to switch between LocalStack and real AWS frequently.
-
-- - -
-## Running the Bot
-
-The Lambda function needs to be invoked repeatedly to poll for new Telegram messages. LocalStack doesn't support event-driven triggers like real AWS, so we use manual polling.
-
-### Single Invocation
-```bash
-awslocal lambda invoke --function-name telegram-bot output.json && cat output.json
-```
-
-### Continuous Polling (Recommended for Development)
-
-Run this loop in the Bash shell to continuously poll for messages:
+Replace `YOUR_BOT_TOKEN` and use the `api_gateway_url` from Terraform output:
 
 ```bash
-while true; do awslocal lambda invoke --function-name telegram-bot out.json >/dev/null 2>&1; sleep 1; done
+curl "https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook?url=YOUR_API_GATEWAY_URL"
 ```
 
-**What this does:**
-- Invokes the Lambda function every second
-- Suppresses output to keep terminal clean
-- Runs until you press `Ctrl+C` to stop
-
-**With visible output:**
+Example:
 ```bash
-while true; do awslocal lambda invoke --function-name telegram-bot out.json && cat out.json | jq ; sleep 1; done
+curl "https://api.telegram.org/bot123456:ABC-DEF/setWebhook?url=https://abc123.execute-api.us-east-1.amazonaws.com/prod/webhook"
 ```
 
-**With timestamps:**
+### Verify Webhook
+
 ```bash
-while true; do echo "$(date '+%H:%M:%S') - Polling..."; awslocal lambda invoke --function-name telegram-bot out.json >/dev/null 2>&1; sleep 1; done
+curl "https://api.telegram.org/botYOUR_BOT_TOKEN/getWebhookInfo"
 ```
 
-### Background Polling
-
-Run polling in the background:
-```bash
-# Start in background
-nohup bash -c 'while true; do awslocal lambda invoke --function-name telegram-bot out.json >/dev/null 2>&1; sleep 1; done' &
-
-# Find and stop the background process
-ps aux | grep "lambda invoke"
-kill <PID>
+Expected response:
+```json
+{
+  "ok": true,
+  "result": {
+    "url": "https://abc123.execute-api.us-east-1.amazonaws.com/prod/webhook",
+    "has_custom_certificate": false,
+    "pending_update_count": 0
+  }
+}
 ```
 
-- - -
-## Commands
+### Test the Bot
 
-**Verify resources:**
-```bash
-# List S3 buckets
-awslocal s3 ls
+1. Open Telegram and find your bot
+2. Send `/start` or `/help`
+3. The bot should respond instantly!
 
-# List DynamoDB tables
-awslocal dynamodb list-tables
+---
 
-# List archived sessions for a user (replace USER_ID)
-awslocal s3 ls s3://chatbot-conversations/archives/USER_ID/
-
-# View Lambda logs
-awslocal logs tail /aws/lambda/telegram-bot --follow
-
-# Scan DynamoDB table
-awslocal dynamodb scan --table-name chatbot-sessions
-```
-
-**Cleanup:**
-```bash
-terraform destroy -auto-approve
-docker compose down
-rm -rf package/ lambda_function.zip
-```
-
-- - -
 ## Project Structure
 
 ```
 .
-├── docker-compose.yml          # LocalStack services configuration
-├── provider.tf                 # Terraform AWS provider (LocalStack endpoints)
-├── main.tf                     # Terraform resources (S3, DynamoDB, IAM, Lambda)
-├── outputs.tf                  # Terraform outputs (resource names)
-├── terraform.tfvars.example    # Example variables file (copy to terraform.tfvars)
-├── terraform.tfvars            # Your local variables (gitignored)
-├── requirements.txt            # Python dependencies (requests, boto3)
-├── handler.py                  # Lambda handler (Telegram polling, sessions, archives)
-├── scripts/
-│   ├── demo.py                 # Demo script for testing S3 and DynamoDB
-│   └── verify.sh               # Bash script to verify LocalStack health
-├── .gitignore                  # Git ignore file
+├── provider.tf                 # AWS provider configuration
+├── main.tf                     # Infrastructure resources (S3, DynamoDB, Lambda, API Gateway)
+├── outputs.tf                  # Terraform outputs (URLs, resource names)
+├── terraform.tfvars.example    # Example configuration file
+├── terraform.tfvars            # Your configuration (gitignored)
+├── requirements.txt            # Python dependencies
+├── handler.py                  # Lambda function code
+├── package/                    # Lambda deployment package (generated)
+├── lambda_function.zip         # Zipped Lambda package (generated)
+├── .gitignore                  # Git ignore rules
 ├── LICENSE                     # GPL v3 License
 └── README.md                   # This documentation
 ```
 
-- - -
+---
+
+## Data Storage
+
+### DynamoDB (Active Sessions)
+
+**Table:** `chatbot-sessions`
+
+| Attribute | Type | Purpose |
+|-----------|------|---------|
+| `pk` | Number | Telegram user ID (partition key) |
+| `sk` | String | Session identifier (sort key) |
+| `model_name` | String | Selected AI model |
+| `session_id` | String | UUID for the session |
+| `conversation` | List | Array of messages |
+| `is_active` | Number | 1 = active, 0 = inactive |
+| `last_message_ts` | Number | Unix timestamp |
+
+**Global Secondary Indexes:**
+- `model_index` - Query by model across users
+- `active_sessions_index` - Query active sessions
+
+### S3 (Archived Sessions)
+
+**Bucket:** `chatbot-conversations-{ACCOUNT_ID}`
+
+**Structure:**
+```
+chatbot-conversations-123456789/
+└── archives/
+    └── {user_id}/
+        ├── {session_id_1}.json
+        └── {session_id_2}.json
+```
+
+---
+
 ## Verification
 
-After deployment, verify resources exist:
+### CLI Verification
 
 ```bash
-# Check S3 bucket
-awslocal s3 ls
+# Check Lambda
+aws lambda get-function --function-name telegram-bot
 
-# Check DynamoDB table
-awslocal dynamodb describe-table --table-name chatbot-sessions | jq '.Table.TableStatus'
+# Check DynamoDB
+aws dynamodb describe-table --table-name chatbot-sessions
 
-# Check Lambda function
-awslocal lambda get-function --function-name telegram-bot | jq '.Configuration.FunctionName'
+# Check S3
+aws s3 ls
 
-# Check Lambda environment variables (verify token is set)
-awslocal lambda get-function-configuration --function-name telegram-bot | jq '.Environment.Variables'
+# Check API Gateway
+aws apigateway get-rest-apis
+
+# View Lambda logs
+aws logs tail /aws/lambda/telegram-bot --follow
 ```
 
-Or use the provided script:
-```bash
-bash scripts/verify.sh
-```
+### AWS Console Verification
 
-- - -
+Access the console through AWS Academy:
+1. Click **AWS** button (green dot) in Vocareum
+2. Navigate to Lambda, DynamoDB, S3, API Gateway services
+
+---
+
 ## Troubleshooting
 
-* **Port conflicts**: Stop other containers using conflicting ports.
-* **Terraform connection errors**: Ensure LocalStack container is running (`docker compose up -d`).
-* **AWS CLI timeouts**: Use `awslocal` or add `--endpoint-url http://localhost:4566` for all commands.
-* **Reset LocalStack data**: Stop LocalStack and delete the `localstack-data/` folder, then restart.
-* **Docker permissions (Linux)**: Add your user to the `docker` group and re-login.
-* **Lambda invocation errors**: Verify the Telegram token is set correctly in `terraform.tfvars`.
-* **Telegram messages not received**: Ensure the polling loop is running.
-* **Archive import fails**: Ensure the JSON file has a valid `conversation` array field.
-* **S3 access errors**: Verify the S3 bucket exists with `awslocal s3 ls`.
-* **"No module named requests"**: Rebuild the Lambda package with `pip install -r requirements.txt -t ./package`.
+### Authentication Errors
+- Session tokens expire every few hours
+- Refresh credentials from AWS Academy → AWS Details
 
-- - -
+### "AccessDenied" for IAM
+- AWS Academy restricts IAM role creation
+- Use the pre-existing `LabRole` via `lab_role_arn` variable
+
+### Lambda Not Responding
+- Check CloudWatch logs: `aws logs tail /aws/lambda/telegram-bot --follow`
+- Verify environment variables are set
+
+### Webhook Not Working
+- Verify API Gateway URL is correct
+- Test Lambda directly: `aws lambda invoke --function-name telegram-bot out.json`
+- Check webhook info: `curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"`
+
+### S3 Bucket Name Conflict
+- Bucket names must be globally unique
+- The template uses `chatbot-conversations-{ACCOUNT_ID}` for uniqueness
+
+---
+
+## Cleanup
+
+### Remove All Resources
+
+```bash
+terraform destroy -auto-approve
+```
+
+### Remove Telegram Webhook
+
+```bash
+curl "https://api.telegram.org/botYOUR_BOT_TOKEN/deleteWebhook"
+```
+
+---
+
+## Quick Reference
+
+```bash
+# Deploy
+terraform init && terraform apply -auto-approve
+
+# Get webhook URL
+terraform output api_gateway_url
+
+# Set webhook
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=<URL>"
+
+# Check webhook
+curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
+
+# View logs
+aws logs tail /aws/lambda/telegram-bot --follow
+
+# Test Lambda
+aws lambda invoke --function-name telegram-bot out.json && cat out.json
+
+# Destroy
+terraform destroy -auto-approve
+```
+
+---
+
 ## License
 
-This project is licensed under **GNU General Public License v3.0 or later (GPLv3+)**. See [GNU GPLv3](https://www.gnu.org/licenses/gpl-3.0.en.html) for full details.
+This project is licensed under **GNU General Public License v3.0 or later (GPLv3+)**. See [LICENSE](LICENSE) for details.
