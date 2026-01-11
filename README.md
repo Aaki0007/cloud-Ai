@@ -278,7 +278,8 @@ If the bot stops responding after redeployment:
 ├── package/                    # Lambda deployment package (generated)
 ├── lambda_function.zip         # Zipped Lambda package (generated)
 ├── scripts/
-│   └── setup-webhook.sh        # Automated Telegram webhook setup
+│   ├── setup-webhook.sh        # Automated Telegram webhook setup
+│   └── view-data.sh            # View S3 and DynamoDB contents
 ├── .gitignore                  # Git ignore rules
 ├── LICENSE                     # GPL v3 License
 └── README.md                   # This documentation
@@ -322,6 +323,24 @@ chatbot-conversations-123456789/
 ---
 
 ## Verification
+
+### View Stored Data
+
+Use the data viewer script to inspect what's stored in S3 and DynamoDB:
+
+```bash
+# Show summary of all data
+./scripts/view-data.sh
+
+# Show full content (verbose mode)
+./scripts/view-data.sh -v
+
+# Show only DynamoDB sessions
+./scripts/view-data.sh dynamodb
+
+# Show only S3 archives
+./scripts/view-data.sh s3
+```
 
 ### CLI Verification
 
@@ -409,11 +428,12 @@ curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=<URL>"
 # Check webhook
 curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
 
+# View stored data (S3 + DynamoDB)
+./scripts/view-data.sh
+./scripts/view-data.sh -v  # verbose
+
 # View logs
 aws logs tail /aws/lambda/telegram-bot --follow
-
-# Test Lambda
-aws lambda invoke --function-name telegram-bot out.json && cat out.json
 
 # Destroy
 terraform destroy -auto-approve
