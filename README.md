@@ -43,16 +43,16 @@ This project creates a serverless Telegram bot running on AWS. When users send m
 ## Architecture
 
 ```
-┌─────────────┐      ┌─────────────────┐      ┌────────────────┐
+┌─────────────┐       ┌─────────────────┐       ┌────────────────┐
 │   Telegram  │─────▶│   API Gateway   │─────▶│     Lambda     │
 │    User     │◀─────│   (webhook)     │◀─────│  (handler.py)  │
-└─────────────┘      └─────────────────┘      └────────────────┘
+└─────────────┘       └─────────────────┘       └────────────────┘
                                                       │
                               ┌───────────────────────┴───────────────────────┐
                               ▼                                               ▼
                      ┌─────────────────┐                             ┌─────────────────┐
                      │    DynamoDB     │                             │       S3        │
-                     │ (active sessions)│                             │ (archived chats)│
+                     │(active sessions)│                             │ (archived chats)│
                      └─────────────────┘                             └─────────────────┘
 ```
 
@@ -200,11 +200,30 @@ After deployment, Terraform will output:
 
 ## Telegram Webhook Setup
 
-### Set the Webhook
+### Automated Setup (Recommended)
 
-Replace `YOUR_BOT_TOKEN` and use the `api_gateway_url` from Terraform output:
+Run the webhook setup script - it reads your token from `terraform.tfvars` and configures everything automatically:
 
 ```bash
+./scripts/setup-webhook.sh
+```
+
+The script will:
+1. Read your bot token from `terraform.tfvars` (keeps it private)
+2. Get the API Gateway URL from Terraform outputs
+3. Register the webhook with Telegram
+4. Verify the configuration
+5. Test bot connectivity
+
+### Manual Setup
+
+If you prefer to set up manually, replace `YOUR_BOT_TOKEN` and use the `api_gateway_url` from Terraform output:
+
+```bash
+# Get your API Gateway URL
+terraform output api_gateway_url
+
+# Set the webhook
 curl "https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook?url=YOUR_API_GATEWAY_URL"
 ```
 
@@ -237,6 +256,12 @@ Expected response:
 2. Send `/start` or `/help`
 3. The bot should respond instantly!
 
+### Troubleshooting Webhook Issues
+
+If the bot stops responding after redeployment:
+- The API Gateway URL may have changed
+- Run `./scripts/setup-webhook.sh` to update the webhook
+
 ---
 
 ## Project Structure
@@ -252,6 +277,8 @@ Expected response:
 ├── handler.py                  # Lambda function code
 ├── package/                    # Lambda deployment package (generated)
 ├── lambda_function.zip         # Zipped Lambda package (generated)
+├── scripts/
+│   └── setup-webhook.sh        # Automated Telegram webhook setup
 ├── .gitignore                  # Git ignore rules
 ├── LICENSE                     # GPL v3 License
 └── README.md                   # This documentation
@@ -370,9 +397,12 @@ curl "https://api.telegram.org/botYOUR_BOT_TOKEN/deleteWebhook"
 # Deploy
 terraform init && terraform apply -auto-approve
 
+# Setup webhook (automated - recommended)
+./scripts/setup-webhook.sh
+
+# Or manually:
 # Get webhook URL
 terraform output api_gateway_url
-
 # Set webhook
 curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=<URL>"
 
