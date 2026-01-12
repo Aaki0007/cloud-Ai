@@ -146,7 +146,7 @@ common_tags = {
 
 **Branch Strategy:**
 ```
-main (production)
+master (production)
   │
   └── dev (development)
         │
@@ -190,7 +190,7 @@ resource "aws_cloudwatch_log_group" "lambda_logs" {
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | `terraform-validate.yml` | Push/PR | Validate Terraform & lint Python |
-| `pr-check.yml` | PR to main | Check branch naming, secrets |
+| `pr-check.yml` | PR to master | Check branch naming, secrets |
 | `deploy.yml` | Manual | Deploy to AWS |
 
 ---

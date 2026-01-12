@@ -5,7 +5,7 @@
 This project follows a **Git Flow** branching strategy:
 
 ```
-main (production)
+master (production)
   │
   ├── dev (development/staging)
   │     │
@@ -20,11 +20,11 @@ main (production)
 
 | Branch | Purpose | Base | Merges To |
 |--------|---------|------|-----------|
-| `main` | Production-ready code | - | - |
-| `dev` | Development/staging | `main` | `main` |
+| `master` | Production-ready code | - | - |
+| `dev` | Development/staging | `master` | `master` |
 | `feature/*` | New features | `dev` | `dev` |
 | `bugfix/*` | Bug fixes | `dev` | `dev` |
-| `hotfix/*` | Critical production fixes | `main` | `main` & `dev` |
+| `hotfix/*` | Critical production fixes | `master` | `master` & `dev` |
 
 ### Workflow
 
@@ -49,7 +49,7 @@ main (production)
 
 4. **After PR approval:**
    - Merge to `dev` for testing
-   - After testing, create PR from `dev` to `main`
+   - After testing, create PR from `dev` to `master`
 
 ### Commit Message Convention
 
