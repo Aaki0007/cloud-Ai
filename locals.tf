@@ -12,6 +12,7 @@ locals {
   # Common tags applied to all resources
   common_tags = {
     Project     = "AI-Chatbot"
+    Team        = "CloudDev"
     Environment = var.environment
     ManagedBy   = "Terraform"
     Repository  = "github.com/Man2Dev/cloud-Ai"

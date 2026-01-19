@@ -10,6 +10,18 @@ terraform {
     }
   }
   required_version = ">= 1.0.0"
+
+  # Remote State Configuration
+  # Uncomment the backend block below after creating the S3 bucket and DynamoDB table
+  # See README.md "Remote State Setup" section for prerequisites
+  #
+  # backend "s3" {
+  #   bucket         = "terraform-state-<ACCOUNT_ID>"
+  #   key            = "ai-chatbot/terraform.tfstate"
+  #   region         = "us-east-1"
+  #   encrypt        = true
+  #   dynamodb_table = "terraform-locks"
+  # }
 }
 
 provider "aws" {
