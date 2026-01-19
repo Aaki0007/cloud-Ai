@@ -41,8 +41,8 @@
 | Separate files | ✅ Implemented | `provider.tf`, `variables.tf`, `locals.tf`, `main.tf`, `outputs.tf` |
 | Variables file | ✅ Implemented | Dedicated `variables.tf` with validation |
 | Locals block | ✅ Implemented | `locals.tf` for common tags and naming |
-| Backend config | ⚠️ Partial | Local state (remote state optional for AWS Academy) |
-| Modules | ⚠️ Future | Single-project, modules planned for scaling |
+| Backend config | ✅ Implemented | S3 + DynamoDB backend in `backend-setup/`, config in `provider.tf` |
+| Modules | ✅ Implemented | `modules/s3`, `modules/dynamodb`, `modules/lambda`, `modules/api_gateway` |
 
 **Current File Structure:**
 ```
@@ -127,6 +127,7 @@ AWS Academy restricts IAM role creation. We use the pre-existing `LabRole`.
 ```hcl
 common_tags = {
   Project     = "AI-Chatbot"
+  Team        = "CloudDev"
   Environment = var.environment  # dev, staging, prod
   ManagedBy   = "Terraform"
   Repository  = "github.com/Man2Dev/cloud-Ai"

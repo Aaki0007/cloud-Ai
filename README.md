@@ -13,10 +13,12 @@ This project deploys a **Telegram chatbot** on AWS using Infrastructure as Code 
 * [Features](#features)
 * [Prerequisites](#prerequisites)
 * [AWS Academy Setup](#aws-academy-setup)
+* [Remote State Setup](#remote-state-setup)
 * [Deployment](#deployment)
 * [Telegram Webhook Setup](#telegram-webhook-setup)
 * [Bot Commands](#bot-commands)
 * [Project Structure](#project-structure)
+* [Module Structure](#module-structure)
 * [Data Storage](#data-storage)
 * [Verification](#verification)
 * [Troubleshooting](#troubleshooting)
@@ -138,6 +140,63 @@ aws iam get-role --role-name LabRole --query 'Role.Arn' --output text
 ```
 
 Output: `arn:aws:iam::ACCOUNT_ID:role/LabRole`
+
+---
+
+## Remote State Setup
+
+Remote state stores your Terraform state in S3 with DynamoDB locking, enabling team collaboration and state protection.
+
+### Prerequisites
+
+Before enabling remote state, you need to create the backend infrastructure:
+
+1. **Create Backend Resources**
+
+```bash
+cd backend-setup
+terraform init
+terraform apply -auto-approve
+```
+
+This creates:
+- S3 bucket: `terraform-state-{ACCOUNT_ID}` (versioned, encrypted)
+- DynamoDB table: `terraform-locks` (for state locking)
+
+2. **Note the Output**
+
+After applying, note the `backend_config` output which shows the exact configuration to use.
+
+3. **Enable Remote State**
+
+Edit `provider.tf` and uncomment the backend block:
+
+```hcl
+terraform {
+  # ... required_providers ...
+
+  backend "s3" {
+    bucket         = "terraform-state-<ACCOUNT_ID>"
+    key            = "ai-chatbot/terraform.tfstate"
+    region         = "us-east-1"
+    encrypt        = true
+    dynamodb_table = "terraform-locks"
+  }
+}
+```
+
+4. **Migrate State**
+
+```bash
+cd ..  # Return to project root
+terraform init -migrate-state
+```
+
+Terraform will ask to copy your existing local state to the new S3 backend.
+
+### AWS Academy Note
+
+In AWS Academy environments, the backend S3 bucket and DynamoDB table may need to be recreated each session since resources are deleted when labs end. For persistent setups, consider using a personal AWS account.
 
 ---
 
@@ -268,11 +327,18 @@ If the bot stops responding after redeployment:
 
 ```
 .
-├── provider.tf                 # AWS provider configuration
+├── provider.tf                 # AWS provider + backend configuration
 ├── variables.tf                # Variable definitions with validation
 ├── locals.tf                   # Local values for naming/tags
-├── main.tf                     # Infrastructure resources
-├── outputs.tf                  # Terraform outputs
+├── main.tf                     # Module calls and data sources
+├── outputs.tf                  # Terraform outputs (from modules)
+├── modules/                    # Reusable Terraform modules
+│   ├── s3/                     # S3 bucket module
+│   ├── dynamodb/               # DynamoDB table module
+│   ├── lambda/                 # Lambda function module
+│   └── api_gateway/            # API Gateway module
+├── backend-setup/              # Remote state infrastructure
+│   └── main.tf                 # S3 bucket + DynamoDB for state
 ├── terraform.tfvars.example    # Example configuration
 ├── terraform.tfvars            # Your configuration (gitignored)
 ├── requirements.txt            # Python dependencies
@@ -289,10 +355,64 @@ If the bot stops responding after redeployment:
 │   ├── pr-check.yml            # CI: PR validation
 │   └── deploy.yml              # CD: AWS deployment
 ├── CONTRIBUTING.md             # Branch strategy & guidelines
+├── CHANGELOG.md                # Project changelog
 ├── .gitignore                  # Git ignore rules
 ├── LICENSE                     # GPL v3 License
 └── README.md                   # This documentation
 ```
+
+---
+
+## Module Structure
+
+The infrastructure is organized into reusable modules:
+
+### S3 Module (`modules/s3/`)
+
+Creates an S3 bucket with versioning and lifecycle rules.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `bucket_name` | Name of the bucket | Required |
+| `versioning_enabled` | Enable versioning | `true` |
+| `enable_lifecycle_rules` | Enable archival rules | `true` |
+| `transition_to_ia_days` | Days before IA transition | `90` |
+| `transition_to_glacier_days` | Days before Glacier | `180` |
+
+### DynamoDB Module (`modules/dynamodb/`)
+
+Creates a DynamoDB table with GSIs and TTL support.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `table_name` | Name of the table | Required |
+| `billing_mode` | PAY_PER_REQUEST or PROVISIONED | `PAY_PER_REQUEST` |
+| `hash_key` | Partition key name | Required |
+| `global_secondary_indexes` | List of GSI configurations | `[]` |
+| `ttl_enabled` | Enable TTL | `false` |
+
+### Lambda Module (`modules/lambda/`)
+
+Creates a Lambda function with CloudWatch log group.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `function_name` | Name of the function | Required |
+| `filename` | Path to deployment package | Required |
+| `handler` | Function handler | `handler.lambda_handler` |
+| `runtime` | Lambda runtime | `python3.9` |
+| `role_arn` | IAM role ARN | Required |
+
+### API Gateway Module (`modules/api_gateway/`)
+
+Creates a REST API with Lambda integration.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `api_name` | Name of the API | Required |
+| `resource_path` | API path (e.g., webhook) | `webhook` |
+| `lambda_invoke_arn` | Lambda invoke ARN | Required |
+| `stage_name` | Deployment stage | `dev` |
 
 ---
 
