@@ -2,7 +2,7 @@
 
 This project deploys a **Telegram chatbot** on AWS using Infrastructure as Code (Terraform). It provisions **S3 buckets** for storing archived chat history, **DynamoDB tables** for managing user sessions, **Lambda** for serverless processing, and **API Gateway** for real-time webhook integration with Telegram.
 
-> **⚠️ Status**: Currently in development. Ollama AI integration (backend models) is not yet implemented. Session management, commands, archive features, and Telegram connectivity are fully functional.
+> **Status**: Fully functional. Ollama AI integration is live on EC2 with API key authentication. Session management, commands, archive features, and AI chat are all working.
 
 ---
 
@@ -19,6 +19,7 @@ This project deploys a **Telegram chatbot** on AWS using Infrastructure as Code 
 * [Bot Commands](#bot-commands)
 * [Project Structure](#project-structure)
 * [Module Structure](#module-structure)
+* [External API Integration](#external-api-integration)
 * [Data Storage](#data-storage)
 * [Observability](#observability)
 * [Verification](#verification)
@@ -39,24 +40,24 @@ This project creates a serverless Telegram bot running on AWS. When users send m
 - ✅ Archive system (`/archive`, `/listarchives`, `/export`, file import)
 - ✅ DynamoDB for live session storage
 - ✅ S3 for archived session storage
-- ⏳ Ollama AI integration (planned for next phase)
+- ✅ Ollama AI integration with API key authentication
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────┐       ┌─────────────────┐       ┌────────────────┐
-│   Telegram  │─────▶│   API Gateway   │─────▶│     Lambda     │
-│    User     │◀─────│   (webhook)     │◀─────│  (handler.py)  │
-└─────────────┘       └─────────────────┘       └────────────────┘
-                                                      │
-                              ┌───────────────────────┴───────────────────────┐
-                              ▼                                               ▼
-                     ┌─────────────────┐                             ┌─────────────────┐
-                     │    DynamoDB     │                             │       S3        │
-                     │(active sessions)│                             │ (archived chats)│
-                     └─────────────────┘                             └─────────────────┘
+┌─────────────┐       ┌─────────────────┐       ┌────────────────┐       ┌─────────────────┐
+│   Telegram  │─────▶│   API Gateway   │─────▶│     Lambda     │─────▶│   EC2 (Ollama)  │
+│    User     │◀─────│   (webhook)     │◀─────│  (handler.py)  │◀─────│  AI inference   │
+└─────────────┘       └─────────────────┘       └────────────────┘       └─────────────────┘
+                                                      │                         │
+                              ┌───────────────────────┴──────────┐              │
+                              ▼                                  ▼              ▼
+                     ┌─────────────────┐                ┌─────────────────────────────┐
+                     │    DynamoDB     │                │            S3               │
+                     │(active sessions)│                │ (archived chats + AI models)│
+                     └─────────────────┘                └─────────────────────────────┘
 ```
 
 **Flow:**
@@ -89,7 +90,7 @@ This project creates a serverless Telegram bot running on AWS. When users send m
 | Send JSON file | Import archive from file | ✅ Working |
 | `/status` | Check bot status | ✅ Working |
 | `/echo <text>` | Echo back text (test command) | ✅ Working |
-| Chat messages | Send to AI model | ⏳ Not implemented |
+| Chat messages | Send to AI model | ✅ Working |
 
 ---
 
@@ -338,7 +339,8 @@ If the bot stops responding after redeployment:
 │   ├── dynamodb/               # DynamoDB table module
 │   ├── lambda/                 # Lambda function module
 │   ├── api_gateway/            # API Gateway module
-│   └── monitoring/             # CloudWatch metric filter + alarm
+│   ├── monitoring/             # CloudWatch metric filter + alarm
+│   └── ec2/                   # EC2 Ollama inference server
 ├── backend-setup/              # Remote state infrastructure
 │   └── main.tf                 # S3 bucket + DynamoDB for state
 ├── terraform.tfvars.example    # Example configuration
@@ -349,7 +351,8 @@ If the bot stops responding after redeployment:
 ├── scripts/
 │   ├── setup-webhook.sh        # Telegram webhook setup
 │   ├── view-data.sh            # View S3/DynamoDB contents
-│   └── test-observability.sh   # Verify logging, metrics, alarms
+│   ├── test-observability.sh   # Verify logging, metrics, alarms
+│   └── manage-ollama.sh       # Start/stop Ollama EC2 instance
 ├── docs/
 │   ├── GAP_ANALYSIS.md         # Best practices analysis
 │   └── DEMO_CHEATSHEET.md      # Demo commands reference
@@ -416,6 +419,64 @@ Creates a REST API with Lambda integration.
 | `resource_path` | API path (e.g., webhook) | `webhook` |
 | `lambda_invoke_arn` | Lambda invoke ARN | Required |
 | `stage_name` | Deployment stage | `dev` |
+
+### EC2 Module (`modules/ec2/`)
+
+Creates an EC2 instance running Ollama for AI inference.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `instance_name` | Name tag for the instance | Required |
+| `instance_type` | EC2 instance type | `t3.large` |
+| `ollama_model` | Model to pull on first boot | `tinyllama` |
+| `models_s3_bucket` | S3 bucket for model persistence | Required |
+| `ssh_allowed_cidr` | CIDR for SSH access | `0.0.0.0/0` |
+
+---
+
+## External API Integration
+
+### Ollama (Self-Hosted LLM Inference)
+
+The bot integrates with [Ollama](https://ollama.com), a self-hosted large language model inference server running on an EC2 instance. When users send chat messages, Lambda calls the Ollama API over HTTP to generate AI responses.
+
+**API Details:**
+
+| Property | Value |
+|---|---|
+| Service | Ollama (self-hosted) |
+| Endpoint | `POST http://<EC2_EIP>:11434/api/chat` |
+| Protocol | HTTP (REST) |
+| Authentication | API key via `X-API-Key` header (nginx reverse proxy) |
+| Request format | JSON: `{"model": "tinyllama", "messages": [...], "stream": false}` |
+| Response format | JSON: `{"message": {"content": "..."}}` |
+
+**Error Handling:**
+- Connection timeouts (45s) with structured JSON error logging
+- HTTP status code validation (non-200 responses return user-friendly error)
+- Exception handling with stack traces logged to CloudWatch
+- Graceful fallback: bot remains functional even if Ollama is unreachable
+
+**Secrets Management:**
+- `OLLAMA_URL` passed as Lambda environment variable via Terraform (not hardcoded)
+- `OLLAMA_API_KEY` auto-generated (32-char random password) and passed to both Lambda and EC2 via Terraform
+- API key validated by nginx reverse proxy on EC2 (returns 401 without valid key)
+
+**Security:**
+- Nginx reverse proxy validates `X-API-Key` header on all requests to port 11434
+- Ollama binds to `127.0.0.1:11435` (localhost only, not externally accessible)
+- SSH restricted to configurable CIDR (`ssh_allowed_cidr` variable)
+- S3 bucket: public access blocked, AES256 server-side encryption
+- DynamoDB: server-side encryption enabled, point-in-time recovery enabled
+- Sensitive Terraform outputs marked with `sensitive = true`
+
+**Lifecycle Management:**
+
+```bash
+./scripts/manage-ollama.sh start    # Start instance, wait for Ollama API
+./scripts/manage-ollama.sh stop     # Stop instance (syncs models to S3)
+./scripts/manage-ollama.sh status   # Check instance and API health
+```
 
 ---
 
