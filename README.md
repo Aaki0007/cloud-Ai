@@ -402,6 +402,18 @@ Creates a REST API with Lambda integration.
 | `lambda_invoke_arn` | Lambda invoke ARN | Required |
 | `stage_name` | Deployment stage | `dev` |
 
+### Monitoring Module (`modules/monitoring/`)
+
+Creates a CloudWatch metric filter and alarm for error detection.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `function_name` | Lambda function name | Required |
+| `log_group_name` | CloudWatch log group name | Required |
+| `metric_namespace` | CloudWatch metric namespace | `TelegramBot` |
+| `error_threshold` | Error count to trigger alarm | `1` |
+| `evaluation_period_minutes` | Alarm evaluation window | `5` |
+
 ---
 
 ## Data Storage
@@ -521,6 +533,16 @@ Use the data viewer script to inspect what's stored in S3 and DynamoDB:
 ./scripts/view-data.sh s3
 ```
 
+### Verify Observability
+
+Run the automated observability test to verify logging, metrics, and alarms are working:
+
+```bash
+./scripts/test-observability.sh
+```
+
+This checks AWS credentials, log group retention, metric filter, alarm, triggers success/error events, and verifies structured log output.
+
 ### CLI Verification
 
 ```bash
@@ -610,6 +632,14 @@ curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
 # View stored data (S3 + DynamoDB)
 ./scripts/view-data.sh
 ./scripts/view-data.sh -v  # verbose
+
+# Verify observability (logs, metrics, alarm)
+./scripts/test-observability.sh
+
+# Switch state backend
+./scripts/manage-state.sh remote   # use S3 remote state
+./scripts/manage-state.sh local    # use local state
+./scripts/manage-state.sh status   # check current backend
 
 # View logs
 aws logs tail /aws/lambda/telegram-bot --follow
