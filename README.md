@@ -20,6 +20,7 @@ This project deploys a **Telegram chatbot** on AWS using Infrastructure as Code 
 * [Project Structure](#project-structure)
 * [Module Structure](#module-structure)
 * [Data Storage](#data-storage)
+* [Observability](#observability)
 * [Verification](#verification)
 * [Troubleshooting](#troubleshooting)
 * [Cleanup](#cleanup)
@@ -336,7 +337,8 @@ If the bot stops responding after redeployment:
 │   ├── s3/                     # S3 bucket module
 │   ├── dynamodb/               # DynamoDB table module
 │   ├── lambda/                 # Lambda function module
-│   └── api_gateway/            # API Gateway module
+│   ├── api_gateway/            # API Gateway module
+│   └── monitoring/             # CloudWatch metric filter + alarm
 ├── backend-setup/              # Remote state infrastructure
 │   └── main.tf                 # S3 bucket + DynamoDB for state
 ├── terraform.tfvars.example    # Example configuration
@@ -346,7 +348,8 @@ If the bot stops responding after redeployment:
 ├── package/                    # Lambda deployment package (generated)
 ├── scripts/
 │   ├── setup-webhook.sh        # Telegram webhook setup
-│   └── view-data.sh            # View S3/DynamoDB contents
+│   ├── view-data.sh            # View S3/DynamoDB contents
+│   └── test-observability.sh   # Verify logging, metrics, alarms
 ├── docs/
 │   ├── GAP_ANALYSIS.md         # Best practices analysis
 │   └── DEMO_CHEATSHEET.md      # Demo commands reference
@@ -447,6 +450,68 @@ chatbot-conversations-123456789/
     └── {user_id}/
         ├── {session_id_1}.json
         └── {session_id_2}.json
+```
+
+---
+
+## Observability
+
+### Log Format
+
+All Lambda logs use structured JSON with consistent fields:
+
+```json
+{
+  "level": "INFO|WARNING|ERROR",
+  "timestamp": "2025-01-20T12:00:00.000000+00:00",
+  "action": "handle_command",
+  "outcome": "success|failure|warning",
+  "message": "Human-readable description",
+  "request_id": "lambda-request-id",
+  "user_id": 123456789,
+  "message_id": 100,
+  "chat_id": 123456789
+}
+```
+
+On errors, `error` and `stack_trace` fields are included automatically.
+
+### Log Retention
+
+- CloudWatch log group: `/aws/lambda/telegram-bot`
+- Retention: **14 days** (configurable via `log_retention_days` variable)
+- Managed by Terraform in the Lambda module
+
+### Metric Filter and Alarm
+
+- **Metric filter**: Captures `{ $.level = "ERROR" }` from structured JSON logs
+- **Metric namespace**: `TelegramBot`
+- **Alarm**: Triggers when **1 or more errors** occur within a **5-minute** window
+- Alarm auto-resolves (returns to OK) when no errors in the next period
+
+### Viewing Logs and Alarm State
+
+```bash
+# Tail live logs
+aws logs tail /aws/lambda/telegram-bot --follow
+
+# Filter for errors only
+aws logs filter-log-events \
+  --log-group-name /aws/lambda/telegram-bot \
+  --filter-pattern '{ $.level = "ERROR" }'
+
+# Check alarm state
+aws cloudwatch describe-alarms \
+  --alarm-names "telegram-bot-error-alarm" \
+  --query 'MetricAlarms[0].{State:StateValue,Reason:StateReason}'
+
+# View metric datapoints (last hour)
+aws cloudwatch get-metric-statistics \
+  --namespace TelegramBot \
+  --metric-name telegram-bot-error-count \
+  --start-time $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+  --period 300 --statistics Sum
 ```
 
 ---
