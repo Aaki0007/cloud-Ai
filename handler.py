@@ -1,13 +1,68 @@
 import json
+import logging
 import os
 import requests
 import boto3
 import time
+import traceback
 import uuid
 from typing import Any, Dict, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 from boto3.dynamodb.conditions import Key
+
+
+# ==================== STRUCTURED LOGGER ====================
+
+class StructuredLogger:
+    """JSON structured logger for Lambda with consistent fields."""
+
+    def __init__(self, name="telegram-bot"):
+        self.logger = logging.getLogger(name)
+        self.logger.setLevel(logging.INFO)
+        self.logger.handlers = []
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        self.logger.addHandler(handler)
+        self._context = {}
+
+    def set_context(self, **kwargs):
+        """Set persistent context fields (request_id, user_id, etc.)."""
+        self._context.update(kwargs)
+
+    def clear_context(self):
+        """Clear context between invocations."""
+        self._context = {}
+
+    def _log(self, level, action, outcome, message="", error=None, **extra):
+        entry = {
+            "level": level,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "action": action,
+            "outcome": outcome,
+            "message": message,
+        }
+        entry.update(self._context)
+        entry.update(extra)
+        if error:
+            entry["error"] = str(error)
+            entry["stack_trace"] = traceback.format_exc()
+        self.logger.log(
+            getattr(logging, level.upper(), logging.INFO),
+            json.dumps(entry, default=str),
+        )
+
+    def info(self, action, outcome="success", message="", **extra):
+        self._log("INFO", action, outcome, message, **extra)
+
+    def warning(self, action, outcome="warning", message="", **extra):
+        self._log("WARNING", action, outcome, message, **extra)
+
+    def error(self, action, outcome="failure", message="", error=None, **extra):
+        self._log("ERROR", action, outcome, message, error=error, **extra)
+
+
+logger = StructuredLogger()
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -34,7 +89,7 @@ def get_last_offset() -> int:
         if 'Item' in response:
             return int(response['Item'].get('last_offset', 0))
     except Exception as e:
-        print(f"Error getting offset: {e}")
+        logger.error("get_offset", message="Failed to get offset from DynamoDB", error=e)
     return 0
 
 
@@ -49,9 +104,9 @@ def save_offset(update_id: int):
                 'last_updated_ts': int(time.time())
             }
         )
-        print(f"Saved offset: {update_id}")
+        logger.info("save_offset", message=f"Saved offset: {update_id}")
     except Exception as e:
-        print(f"Error saving offset: {e}")
+        logger.error("save_offset", message="Failed to save offset", error=e)
 
 
 def poll_messages(offset: int = 0) -> Dict[str, Any]:
@@ -63,7 +118,7 @@ def poll_messages(offset: int = 0) -> Dict[str, Any]:
         if offset > 0:
             params["offset"] = offset
 
-        print(f"Polling with offset: {offset}")
+        logger.info("poll_messages", message=f"Polling with offset: {offset}")
         resp = requests.get(f"{TELEGRAM_API}/getUpdates", params=params, timeout=10)
         return resp.json()
     except Exception as e:
@@ -94,7 +149,7 @@ def send_document(chat_id: int, file_content: bytes, filename: str, caption: str
         resp = requests.post(f"{TELEGRAM_API}/sendDocument", data=data, files=files, timeout=30)
         return resp.json()
     except Exception as e:
-        print(f"Error sending document: {e}")
+        logger.error("send_document", message="Failed to send document", error=e)
         return None
 
 
@@ -106,7 +161,7 @@ def get_telegram_file(file_id: str) -> Optional[bytes]:
         resp = requests.get(f"{TELEGRAM_API}/getFile", params={"file_id": file_id}, timeout=10)
         data = resp.json()
         if not data.get("ok"):
-            print(f"Failed to get file info: {data}")
+            logger.warning("get_telegram_file", message="Failed to get file info", response=str(data))
             return None
 
         file_path = data["result"]["file_path"]
@@ -115,10 +170,10 @@ def get_telegram_file(file_id: str) -> Optional[bytes]:
         if file_resp.status_code == 200:
             return file_resp.content
         else:
-            print(f"Failed to download file: {file_resp.status_code}")
+            logger.error("get_telegram_file", message=f"Failed to download file: {file_resp.status_code}")
             return None
     except Exception as e:
-        print(f"Error downloading file: {e}")
+        logger.error("get_telegram_file", message="Error downloading file", error=e)
         return None
 
 
@@ -130,7 +185,7 @@ def get_user_items(user_id: int) -> List[Dict[str, Any]]:
         )
         return response.get('Items', [])
     except Exception as e:
-        print(f"Error querying user items for {user_id}: {e}")
+        logger.error("get_user_items", message=f"Error querying user items for {user_id}", error=e)
         return []
 
 
@@ -139,9 +194,9 @@ def get_active_session(user_id: int) -> Optional[Dict[str, Any]]:
     items = get_user_items(user_id)
     for item in items:
         if item.get('is_active', 0) == 1:
-            print(f"Found active session for user {user_id}: {item['sk']}")
+            logger.info("get_active_session", message=f"Found active session: {item['sk']}")
             return item
-    print(f"No active session found for user {user_id}")
+    logger.info("get_active_session", outcome="not_found", message=f"No active session for user {user_id}")
     return None
 
 
@@ -164,14 +219,14 @@ def create_session(user_id: int, model_name: str = "llama3") -> Dict[str, Any]:
     existing_items = get_user_items(user_id)
     for it in existing_items:
         if it.get('is_active', 0) == 1 and it['sk'] != sk:
-            print(f"Deactivating existing session for user {user_id}: {it['sk']}")
+            logger.info("create_session", message=f"Deactivating existing session: {it['sk']}")
             table.update_item(
                 Key={'pk': user_id, 'sk': it['sk']},
                 UpdateExpression='SET is_active = :val',
                 ExpressionAttributeValues={':val': 0}
             )
     table.put_item(Item=item)
-    print(f"Created new session for user {user_id}: {sk}")
+    logger.info("create_session", message=f"Created new session: {sk}", session_id=session_id)
     return item
 
 
@@ -179,10 +234,10 @@ def get_current_session(user_id: int) -> Dict[str, Any]:
     """Get active session or create one if none exists."""
     session = get_active_session(user_id)
     if not session:
-        print(f"No active session, creating new for user {user_id}")
+        logger.info("get_current_session", message="No active session, creating new")
         session = create_session(user_id)
     else:
-        print(f"Using existing active session for user {user_id}")
+        logger.info("get_current_session", message="Using existing active session")
     return session
 
 
@@ -191,15 +246,15 @@ def append_to_conversation(session: Dict[str, Any], message_dict: Dict[str, Any]
     session['conversation'].append(message_dict)
     session['last_message_ts'] = int(time.time())
     table.put_item(Item=session)
-    print(f"Appended message to session {session['sk']}, conversation length: {len(session['conversation'])}")
+    logger.info("append_to_conversation", message=f"Conversation length: {len(session['conversation'])}")
 
 
 def call_ollama(model: str, messages: List[Dict[str, Any]]) -> str:
     """Call Ollama API for chat completion."""
     if not OLLAMA_URL:
-        print("OLLAMA_URL not configured.")
+        logger.warning("call_ollama", message="OLLAMA_URL not configured")
         return "Ollama URL not configured. Set OLLAMA_URL env var."
-    print(f"Calling Ollama at {OLLAMA_URL} with model '{model}' (context length: {len(messages)})")
+    logger.info("call_ollama", message=f"Calling Ollama model '{model}'", context_length=len(messages))
     payload = {
         "model": model,
         "messages": messages,
@@ -210,13 +265,13 @@ def call_ollama(model: str, messages: List[Dict[str, Any]]) -> str:
         if resp.status_code == 200:
             data = resp.json()
             response_content = data['message']['content']
-            print(f"Ollama success: Response length {len(response_content)} chars")
+            logger.info("call_ollama", message=f"Response length {len(response_content)} chars")
             return response_content
         else:
-            print(f"Ollama API error: {resp.status_code} - {resp.text}")
+            logger.error("call_ollama", message=f"Ollama API error: {resp.status_code}")
             return f"Sorry, AI response unavailable (error {resp.status_code}). Use /status to check connection."
     except Exception as e:
-        print(f"Ollama call error: {e}")
+        logger.error("call_ollama", message="Ollama connection error", error=e)
         return f"Sorry, AI response unavailable (connection error). Use /status to check connection."
 
 
@@ -231,7 +286,7 @@ def archive_session_to_s3(user_id: int, session: Dict[str, Any]) -> Optional[str
     """Archive a session from DynamoDB to S3."""
     session_id = session.get('session_id', '')
     if not session_id:
-        print(f"Session missing session_id: {session}")
+        logger.error("archive_session", message="Session missing session_id")
         return None
 
     archive_data = {
@@ -259,10 +314,10 @@ def archive_session_to_s3(user_id: int, session: Dict[str, Any]) -> Optional[str
                 'model_name': session.get('model_name', 'unknown')
             }
         )
-        print(f"Archived session to S3: s3://{ARCHIVE_BUCKET}/{s3_key}")
+        logger.info("archive_session", message=f"Archived to s3://{ARCHIVE_BUCKET}/{s3_key}", session_id=session_id)
         return s3_key
     except Exception as e:
-        print(f"Error archiving to S3: {e}")
+        logger.error("archive_session", message="Failed to archive to S3", error=e)
         return None
 
 
@@ -270,10 +325,10 @@ def delete_session_from_dynamodb(user_id: int, sk: str) -> bool:
     """Delete a session from DynamoDB after archiving."""
     try:
         table.delete_item(Key={'pk': user_id, 'sk': sk})
-        print(f"Deleted session from DynamoDB: pk={user_id}, sk={sk}")
+        logger.info("delete_session", message=f"Deleted session: pk={user_id}, sk={sk}")
         return True
     except Exception as e:
-        print(f"Error deleting session from DynamoDB: {e}")
+        logger.error("delete_session", message="Failed to delete session", error=e)
         return False
 
 
@@ -294,9 +349,9 @@ def list_user_archives(user_id: int) -> List[Dict[str, Any]]:
                     'size': obj['Size'],
                     'last_modified': obj['LastModified'].isoformat() if obj.get('LastModified') else ''
                 })
-        print(f"Found {len(archives)} archives for user {user_id}")
+        logger.info("list_archives", message=f"Found {len(archives)} archives")
     except Exception as e:
-        print(f"Error listing archives: {e}")
+        logger.error("list_archives", message="Failed to list archives", error=e)
 
     return archives
 
@@ -310,10 +365,10 @@ def get_archive_from_s3(user_id: int, session_id: str) -> Optional[Dict[str, Any
         content = response['Body'].read().decode('utf-8')
         return json.loads(content)
     except s3_client.exceptions.NoSuchKey:
-        print(f"Archive not found: {s3_key}")
+        logger.warning("get_archive", outcome="not_found", message=f"Archive not found: {s3_key}")
         return None
     except Exception as e:
-        print(f"Error retrieving archive: {e}")
+        logger.error("get_archive", message="Failed to retrieve archive", error=e)
         return None
 
 
@@ -348,10 +403,10 @@ def import_archive_to_s3(user_id: int, archive_data: Dict[str, Any]) -> Optional
                 'imported': 'true'
             }
         )
-        print(f"Imported archive to S3: s3://{ARCHIVE_BUCKET}/{s3_key}")
+        logger.info("import_archive", message=f"Imported to s3://{ARCHIVE_BUCKET}/{s3_key}")
         return new_session_id
     except Exception as e:
-        print(f"Error importing archive to S3: {e}")
+        logger.error("import_archive", message="Failed to import archive", error=e)
         return None
 
 
@@ -359,7 +414,7 @@ def import_archive_to_s3(user_id: int, archive_data: Dict[str, Any]) -> Optional
 
 def handle_command(cmd: str, payload: str, chat_id: int, user_id: int, update_id: int) -> str:
     """Handle bot commands."""
-    print(f"Handling command '{cmd}' for user {user_id} in chat {chat_id}")
+    logger.info("handle_command", message=f"Command: {cmd}", command=cmd)
 
     if cmd == "/start" or cmd == "/hello":
         session = get_current_session(user_id)
@@ -592,7 +647,7 @@ def handle_document(document: Dict[str, Any], chat_id: int, user_id: int) -> str
     file_id = document.get('file_id', '')
     mime_type = document.get('mime_type', '')
 
-    print(f"Received document: {file_name} ({mime_type}) from user {user_id}")
+    logger.info("handle_document", message=f"Received document: {file_name} ({mime_type})")
 
     if not (file_name.endswith('.json') or mime_type == 'application/json'):
         send_message(chat_id, "Please send a JSON file to import an archive.\nExport archives using /export to get the correct format.")
@@ -645,7 +700,7 @@ def handle_message(text: str, chat_id: int, user_id: int, update_id: int, docume
         send_message(chat_id, "No text received.")
         return "no_text"
 
-    print(f"Processing update_id={update_id}, text='{text}' for user {user_id} in chat {chat_id}")
+    logger.info("handle_message", message=f"Processing text message", update_id=update_id)
 
     if text.startswith('/'):
         parts = text.split(" ", 1)
@@ -673,19 +728,22 @@ def process_telegram_update(update: Dict[str, Any]) -> Dict[str, Any]:
     message = update.get("message")
     
     if not message:
-        print(f"No message in update_id={update_id}, skipping")
+        logger.warning("process_update", outcome="skipped", message=f"No message in update_id={update_id}")
         return {"processed": False, "reason": "no_message"}
-    
+
     chat_id = message.get("chat", {}).get("id")
     from_user = message.get('from', {})
     user_id = from_user.get('id', chat_id)
     text = message.get("text", "")
     document = message.get("document")
-    
+
+    # Set context for all subsequent log entries in this request
+    logger.set_context(user_id=user_id, message_id=update_id, chat_id=chat_id)
+
     if chat_id is None:
-        print(f"No chat_id in update_id={update_id}, skipping")
+        logger.warning("process_update", outcome="skipped", message="No chat_id in update")
         return {"processed": False, "reason": "no_chat_id"}
-    
+
     handle_result = handle_message(text, chat_id, user_id, update_id, document)
     
     return {
@@ -704,8 +762,13 @@ def lambda_handler(event, context):
     1. Webhook mode (API Gateway triggers Lambda with Telegram update in body)
     2. Polling mode (Manual invocation to poll Telegram getUpdates)
     """
-    print(f"Event received: {json.dumps(event)[:500]}...")
-    
+    # Set request context from Lambda context
+    request_id = getattr(context, 'aws_request_id', 'unknown') if context else 'unknown'
+    logger.clear_context()
+    logger.set_context(request_id=request_id)
+
+    logger.info("lambda_handler", message="Event received", mode="webhook" if 'body' in event else "polling")
+
     # Check if this is a webhook request from API Gateway
     if 'body' in event:
         # API Gateway webhook mode
@@ -715,11 +778,11 @@ def lambda_handler(event, context):
                 update = json.loads(body)
             else:
                 update = body
-            
-            print(f"Webhook update received: {json.dumps(update)[:500]}...")
-            
+
+            logger.info("webhook", message="Processing webhook update", update_id=update.get("update_id", 0))
+
             result = process_telegram_update(update)
-            
+
             # Always return 200 to Telegram to acknowledge receipt
             return {
                 "statusCode": 200,
@@ -727,16 +790,14 @@ def lambda_handler(event, context):
                 "body": json.dumps({"ok": True, "result": result})
             }
         except json.JSONDecodeError as e:
-            print(f"JSON decode error: {e}")
+            logger.error("webhook", message="Invalid JSON in request body", error=e)
             return {
                 "statusCode": 200,
                 "headers": {"Content-Type": "application/json"},
                 "body": json.dumps({"ok": False, "error": "Invalid JSON"})
             }
         except Exception as e:
-            print(f"Webhook error: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error("webhook", message="Unhandled webhook error", error=e)
             return {
                 "statusCode": 200,
                 "headers": {"Content-Type": "application/json"},
@@ -746,10 +807,10 @@ def lambda_handler(event, context):
     # Polling mode (manual invocation or scheduled)
     try:
         last_offset = get_last_offset()
-        print(f"Polling mode - Starting with last_offset: {last_offset}")
+        logger.info("polling", message=f"Starting with last_offset: {last_offset}")
 
         if last_offset == 0:
-            print("First run detected - will process only the latest message")
+            logger.info("polling", message="First run detected")
             initial_poll = poll_messages(0)
             if initial_poll.get("ok"):
                 all_updates = initial_poll.get("result", [])
@@ -758,7 +819,7 @@ def lambda_handler(event, context):
                     latest_id = latest_update.get("update_id", 0)
 
                     if len(all_updates) > 1:
-                        print(f"Skipping {len(all_updates) - 1} old messages")
+                        logger.info("polling", message=f"Skipping {len(all_updates) - 1} old messages")
 
                     result = process_telegram_update(latest_update)
                     save_offset(latest_id + 1)
@@ -782,16 +843,16 @@ def lambda_handler(event, context):
 
         if not result.get("ok"):
             error_msg = f"Telegram API error: {result.get('error', result)}"
-            print(error_msg)
+            logger.error("polling", message=error_msg)
             return {"statusCode": 400, "body": error_msg}
 
         updates = result.get("result", [])
 
         if not updates:
-            print("No new messages")
+            logger.info("polling", outcome="no_messages", message="No new messages")
             return {"statusCode": 200, "body": "No messages"}
 
-        print(f"Received {len(updates)} updates")
+        logger.info("polling", message=f"Received {len(updates)} updates")
 
         processed = []
         max_update_id = last_offset
@@ -800,7 +861,7 @@ def lambda_handler(event, context):
             update_id = update.get("update_id", 0)
 
             if last_offset > 0 and update_id < last_offset:
-                print(f"Skipping already-processed update_id={update_id}")
+                logger.info("polling", outcome="skipped", message=f"Already processed update_id={update_id}")
                 max_update_id = max(max_update_id, update_id)
                 continue
 
@@ -812,7 +873,7 @@ def lambda_handler(event, context):
         if max_update_id >= last_offset:
             new_offset = max_update_id + 1
             save_offset(new_offset)
-            print(f"Acknowledged up to update_id={max_update_id}, next offset={new_offset}")
+            logger.info("polling", message=f"Acknowledged up to update_id={max_update_id}, next offset={new_offset}")
 
         return {
             "statusCode": 200,
@@ -825,8 +886,5 @@ def lambda_handler(event, context):
             }
         }
     except Exception as e:
-        error_msg = f"Error: {str(e)}"
-        print(error_msg)
-        import traceback
-        traceback.print_exc()
-        return {"statusCode": 500, "body": error_msg}
+        logger.error("lambda_handler", message="Unhandled error in polling mode", error=e)
+        return {"statusCode": 500, "body": str(e)}
