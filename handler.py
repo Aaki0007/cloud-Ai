@@ -68,6 +68,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://host.docker.internal:11434")
+OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "")
 
 # DynamoDB setup - use environment variable for region if set
 dynamodb = boto3.resource('dynamodb')
@@ -137,6 +138,18 @@ def send_message(chat_id: int, text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def edit_message(chat_id: int, message_id: int, text: str) -> Optional[Dict[str, Any]]:
+    """Edit an existing Telegram message."""
+    if not TELEGRAM_TOKEN:
+        return None
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
+    try:
+        resp = requests.post(f"{TELEGRAM_API}/editMessageText", json=payload, timeout=10)
+        return resp.json()
+    except Exception:
+        return None
+
+
 def send_document(chat_id: int, file_content: bytes, filename: str, caption: str = "") -> Optional[Dict[str, Any]]:
     """Send a document/file to Telegram chat."""
     if not TELEGRAM_TOKEN:
@@ -200,7 +213,7 @@ def get_active_session(user_id: int) -> Optional[Dict[str, Any]]:
     return None
 
 
-def create_session(user_id: int, model_name: str = "llama3") -> Dict[str, Any]:
+def create_session(user_id: int, model_name: str = "tinyllama") -> Dict[str, Any]:
     """Create a new session, deactivate old active ones."""
     session_id = str(uuid.uuid4())
     sk = f"MODEL#{model_name}#SESSION#{session_id}"
@@ -260,8 +273,9 @@ def call_ollama(model: str, messages: List[Dict[str, Any]]) -> str:
         "messages": messages,
         "stream": False
     }
+    headers = {"X-API-Key": OLLAMA_API_KEY} if OLLAMA_API_KEY else {}
     try:
-        resp = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=60)
+        resp = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, headers=headers, timeout=45)
         if resp.status_code == 200:
             data = resp.json()
             response_content = data['message']['content']
@@ -429,7 +443,7 @@ def handle_command(cmd: str, payload: str, chat_id: int, user_id: int, update_id
 /listsessions - List your sessions
 /switch <number> - Switch to a session (e.g., /switch 1)
 /history - Show recent messages in current session
-/status - Check system status (Ollama integration coming soon)
+/status - Check system and Ollama status
 /echo <text> - Echo back text
 
 Archive Commands:
@@ -439,13 +453,25 @@ Archive Commands:
 /export <number> - Export an archive as a file
 (Send a JSON file to import an archive)
 
-Note: AI chat is not yet implemented."""
+Send any text message to chat with the AI model."""
         send_message(chat_id, resp)
         return "help"
 
     if cmd == "/status":
-        resp_msg = "🟢 Bot is running on AWS!\nOllama AI integration not yet implemented. Stay tuned!"
+        ollama_status = "unknown"
+        try:
+            status_headers = {"X-API-Key": OLLAMA_API_KEY} if OLLAMA_API_KEY else {}
+            check = requests.get(f"{OLLAMA_URL}/api/tags", headers=status_headers, timeout=5)
+            if check.status_code == 200:
+                models = [m["name"] for m in check.json().get("models", [])]
+                ollama_status = f"connected, models: {', '.join(models) if models else 'none loaded'}"
+            else:
+                ollama_status = f"error (HTTP {check.status_code})"
+        except Exception:
+            ollama_status = "unreachable (instance may be stopped)"
+        resp_msg = f"Bot: running on AWS\nOllama: {ollama_status}\nEndpoint: {OLLAMA_URL}"
         send_message(chat_id, resp_msg)
+        logger.info("handle_command", message="Status check", ollama_status=ollama_status)
         return "status"
 
     if cmd == "/newsession":
@@ -700,6 +726,11 @@ def handle_message(text: str, chat_id: int, user_id: int, update_id: int, docume
         send_message(chat_id, "No text received.")
         return "no_text"
 
+    MAX_MESSAGE_LENGTH = 4000
+    if len(text) > MAX_MESSAGE_LENGTH:
+        send_message(chat_id, f"Message too long ({len(text)} chars). Max is {MAX_MESSAGE_LENGTH}.")
+        return "message_too_long"
+
     logger.info("handle_message", message=f"Processing text message", update_id=update_id)
 
     if text.startswith('/'):
@@ -711,15 +742,48 @@ def handle_message(text: str, chat_id: int, user_id: int, update_id: int, docume
         session = get_current_session(user_id)
         now = int(time.time())
 
+        # Check if a request is already being processed (within last 55 seconds)
+        pending_since = session.get("pending_request_ts", 0)
+        if pending_since and (now - pending_since) < 55:
+            send_message(chat_id, "Please wait, still generating a response to your previous message...")
+            return "rate_limited"
+
         user_msg = {"role": "user", "content": text, "ts": now}
         append_to_conversation(session, user_msg)
 
-        placeholder_response = "AI is not yet implemented. Your message has been saved to the conversation history for testing."
-        ass_msg = {"role": "assistant", "content": placeholder_response, "ts": int(time.time())}
+        # Mark request as pending
+        session['pending_request_ts'] = now
+        table.put_item(Item=session)
+
+        # Send "Thinking..." message so user knows the bot is working
+        thinking_resp = send_message(chat_id, "Thinking...")
+        thinking_msg_id = None
+        if thinking_resp and thinking_resp.get("ok"):
+            thinking_msg_id = thinking_resp["result"]["message_id"]
+
+        # Build conversation context for Ollama (strip ts field, limit to last 10 messages)
+        all_msgs = [
+            {"role": m["role"], "content": m["content"]}
+            for m in session.get("conversation", [])
+            if "role" in m and "content" in m
+        ]
+        messages = all_msgs[-10:]
+
+        # Call Ollama for AI response
+        model_name = session.get("model_name", "tinyllama")
+        ai_response = call_ollama(model_name, messages)
+
+        # Clear pending flag
+        session['pending_request_ts'] = 0
+        ass_msg = {"role": "assistant", "content": ai_response, "ts": int(time.time())}
         append_to_conversation(session, ass_msg)
 
-        send_message(chat_id, placeholder_response)
-        return "ai_not_ready"
+        # Replace "Thinking..." with the actual response
+        if thinking_msg_id:
+            edit_message(chat_id, thinking_msg_id, ai_response)
+        else:
+            send_message(chat_id, ai_response)
+        return "ai_response"
 
 
 def process_telegram_update(update: Dict[str, Any]) -> Dict[str, Any]:
@@ -744,8 +808,19 @@ def process_telegram_update(update: Dict[str, Any]) -> Dict[str, Any]:
         logger.warning("process_update", outcome="skipped", message="No chat_id in update")
         return {"processed": False, "reason": "no_chat_id"}
 
+    # Deduplicate: check if this update_id was already processed
+    try:
+        dedup_resp = table.get_item(Key={'pk': OFFSET_PK, 'sk': f'update#{update_id}'})
+        if 'Item' in dedup_resp:
+            logger.info("process_update", outcome="skipped", message=f"Duplicate update_id={update_id}")
+            return {"processed": False, "reason": "duplicate"}
+        # Mark this update_id as processed
+        table.put_item(Item={'pk': OFFSET_PK, 'sk': f'update#{update_id}', 'ts': int(time.time())})
+    except Exception:
+        pass  # If dedup check fails, process anyway
+
     handle_result = handle_message(text, chat_id, user_id, update_id, document)
-    
+
     return {
         "processed": True,
         "update_id": update_id,
