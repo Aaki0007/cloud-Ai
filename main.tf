@@ -6,6 +6,14 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 ##########################
+# Ollama API Key
+##########################
+resource "random_password" "ollama_api_key" {
+  length  = 32
+  special = false
+}
+
+##########################
 # Lambda Packaging
 ##########################
 data "archive_file" "lambda_zip" {
@@ -92,16 +100,18 @@ module "lambda" {
   role_arn         = var.lab_role_arn
 
   environment_variables = {
-    TELEGRAM_TOKEN = var.telegram_token
-    S3_BUCKET_NAME = module.s3.bucket_name
-    ENVIRONMENT    = var.environment
+    TELEGRAM_TOKEN  = var.telegram_token
+    S3_BUCKET_NAME  = module.s3.bucket_name
+    ENVIRONMENT     = var.environment
+    OLLAMA_URL      = module.ec2_ollama.ollama_url
+    OLLAMA_API_KEY  = random_password.ollama_api_key.result
   }
 
   log_retention_days = var.log_retention_days
   common_tags        = local.common_tags
   purpose            = "Telegram bot message handler"
 
-  depends_on = [module.s3, module.dynamodb]
+  depends_on = [module.s3, module.dynamodb, module.ec2_ollama]
 }
 
 ##########################
@@ -139,4 +149,26 @@ module "monitoring" {
   common_tags               = local.common_tags
 
   depends_on = [module.lambda]
+}
+
+##########################
+# EC2 Ollama Module
+##########################
+module "ec2_ollama" {
+  source = "./modules/ec2"
+
+  instance_name         = local.ec2_instance_name
+  instance_type         = var.ec2_instance_type
+  key_pair_name         = var.ec2_key_pair_name
+  security_group_name   = local.ec2_sg_name
+  ssh_allowed_cidr      = var.ssh_allowed_cidr
+  ollama_model          = var.ollama_model
+  api_key               = random_password.ollama_api_key.result
+  instance_profile_name = "LabInstanceProfile"
+  models_s3_bucket      = module.s3.bucket_name
+  models_s3_prefix      = local.models_s3_prefix
+  common_tags           = local.common_tags
+  purpose               = "Ollama AI inference server for Telegram bot"
+
+  depends_on = [module.s3]
 }
