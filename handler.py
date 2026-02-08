@@ -266,7 +266,7 @@ def call_ollama(model: str, messages: List[Dict[str, Any]]) -> str:
     """Call Ollama API for chat completion."""
     if not OLLAMA_URL:
         logger.warning("call_ollama", message="OLLAMA_URL not configured")
-        return "Ollama URL not configured. Set OLLAMA_URL env var."
+        return "AI service is not configured. Please contact the administrator."
     logger.info("call_ollama", message=f"Calling Ollama model '{model}'", context_length=len(messages))
     payload = {
         "model": model,
@@ -282,11 +282,11 @@ def call_ollama(model: str, messages: List[Dict[str, Any]]) -> str:
             logger.info("call_ollama", message=f"Response length {len(response_content)} chars")
             return response_content
         else:
-            logger.error("call_ollama", message=f"Ollama API error: {resp.status_code}")
-            return f"Sorry, AI response unavailable (error {resp.status_code}). Use /status to check connection."
+            logger.error("call_ollama", message=f"Ollama API error: HTTP {resp.status_code}")
+            return "Sorry, AI response unavailable. Use /status to check connection."
     except Exception as e:
         logger.error("call_ollama", message="Ollama connection error", error=e)
-        return f"Sorry, AI response unavailable (connection error). Use /status to check connection."
+        return "Sorry, AI response unavailable. Use /status to check connection."
 
 
 # ==================== ARCHIVE FUNCTIONS ====================
@@ -469,7 +469,7 @@ Send any text message to chat with the AI model."""
                 ollama_status = f"error (HTTP {check.status_code})"
         except Exception:
             ollama_status = "unreachable (instance may be stopped)"
-        resp_msg = f"Bot: running on AWS\nOllama: {ollama_status}\nEndpoint: {OLLAMA_URL}"
+        resp_msg = f"Bot: running on AWS\nAI: {ollama_status}"
         send_message(chat_id, resp_msg)
         logger.info("handle_command", message="Status check", ollama_status=ollama_status)
         return "status"
