@@ -25,13 +25,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `backend-setup/` directory with Terraform to create state infrastructure
   - Commented backend block in `provider.tf` ready for activation
   - State locking via DynamoDB for team collaboration
+- **State Management Script**: `scripts/manage-state.sh`
+  - One-command switch between local and remote state
+  - Auto-detects account ID from active AWS credentials
+  - Auto-creates backend infrastructure (S3 bucket, DynamoDB table) if missing
+  - No hardcoded values — fully dynamic
 - **Documentation**: Added observability and remote state sections to README
 
 ### Changed
 - **handler.py**: Replaced all `print()` calls with `StructuredLogger` for JSON-formatted logs
 - **main.tf**: Migrated from inline resources to module calls, added monitoring module
 - **outputs.tf**: Updated outputs to reference module outputs, added monitoring outputs
-- **provider.tf**: Added remote state backend configuration (commented)
+- **provider.tf**: Removed hardcoded account ID from backend config, bucket passed dynamically at init
 
 ### Security
 - **IAM**: Documented least-privilege policy in `docs/GAP_ANALYSIS.md`
