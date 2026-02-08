@@ -61,3 +61,14 @@ output "webhook_setup_command" {
   description = "Command to set up Telegram webhook (replace <YOUR_TOKEN>)"
   sensitive   = false
 }
+
+# Monitoring Outputs
+output "error_alarm_name" {
+  value       = module.monitoring.alarm_name
+  description = "CloudWatch alarm for Lambda errors"
+}
+
+output "error_metric_filter" {
+  value       = module.monitoring.metric_filter_name
+  description = "Metric filter capturing ERROR level logs"
+}

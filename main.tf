@@ -124,3 +124,19 @@ module "api_gateway" {
 
   depends_on = [module.lambda]
 }
+
+##########################
+# Monitoring Module
+##########################
+module "monitoring" {
+  source = "./modules/monitoring"
+
+  function_name             = module.lambda.function_name
+  log_group_name            = module.lambda.log_group_name
+  metric_namespace          = "TelegramBot"
+  error_threshold           = 1
+  evaluation_period_minutes = 5
+  common_tags               = local.common_tags
+
+  depends_on = [module.lambda]
+}
