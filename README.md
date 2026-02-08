@@ -148,52 +148,36 @@ Output: `arn:aws:iam::ACCOUNT_ID:role/LabRole`
 
 Remote state stores your Terraform state in S3 with DynamoDB locking, enabling team collaboration and state protection.
 
-### Prerequisites
+A management script handles everything automatically — no manual file editing or hardcoding needed.
 
-Before enabling remote state, you need to create the backend infrastructure:
-
-1. **Create Backend Resources**
+### Switch to Remote State
 
 ```bash
-cd backend-setup
-terraform init
-terraform apply -auto-approve
+./scripts/manage-state.sh remote
 ```
 
-This creates:
-- S3 bucket: `terraform-state-{ACCOUNT_ID}` (versioned, encrypted)
-- DynamoDB table: `terraform-locks` (for state locking)
+This will:
+- Verify AWS credentials
+- Create the S3 bucket and DynamoDB lock table if they don't exist
+- Uncomment the backend block in `provider.tf`
+- Auto-detect your account ID from active credentials
+- Migrate existing local state to S3
 
-2. **Note the Output**
-
-After applying, note the `backend_config` output which shows the exact configuration to use.
-
-3. **Enable Remote State**
-
-Edit `provider.tf` and uncomment the backend block:
-
-```hcl
-terraform {
-  # ... required_providers ...
-
-  backend "s3" {
-    bucket         = "terraform-state-<ACCOUNT_ID>"
-    key            = "ai-chatbot/terraform.tfstate"
-    region         = "us-east-1"
-    encrypt        = true
-    dynamodb_table = "terraform-locks"
-  }
-}
-```
-
-4. **Migrate State**
+### Switch to Local State
 
 ```bash
-cd ..  # Return to project root
-terraform init -migrate-state
+./scripts/manage-state.sh local
 ```
 
-Terraform will ask to copy your existing local state to the new S3 backend.
+This will:
+- Comment out the backend block in `provider.tf`
+- Migrate remote state back to a local `terraform.tfstate` file
+
+### Check Current Backend
+
+```bash
+./scripts/manage-state.sh status
+```
 
 ### AWS Academy Note
 
@@ -349,7 +333,8 @@ If the bot stops responding after redeployment:
 ├── scripts/
 │   ├── setup-webhook.sh        # Telegram webhook setup
 │   ├── view-data.sh            # View S3/DynamoDB contents
-│   └── test-observability.sh   # Verify logging, metrics, alarms
+│   ├── test-observability.sh   # Verify logging, metrics, alarms
+│   └── manage-state.sh         # Switch between local/remote state
 ├── docs/
 │   ├── GAP_ANALYSIS.md         # Best practices analysis
 │   └── DEMO_CHEATSHEET.md      # Demo commands reference
