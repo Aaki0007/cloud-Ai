@@ -74,6 +74,24 @@ cmd_start() {
         if curl -sf -H "X-API-Key: $api_key" "http://$ip:11434/api/tags" > /dev/null 2>&1; then
             echo "Ollama API is ready!"
             echo "Endpoint: http://$ip:11434"
+
+            # Ensure all required models are pulled and preloaded
+            ensure_ssh_key
+            local models=("llama3.2:1b" "qwen2.5:1.5b-instruct-q4_K_M")
+            for model in "${models[@]}"; do
+                echo "Checking model: $model"
+                ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=5 "ec2-user@$ip" \
+                    "OLLAMA_HOST=http://127.0.0.1:11435 ollama list 2>/dev/null | grep -q '$model' || \
+                     (echo 'Pulling $model...' && OLLAMA_HOST=http://127.0.0.1:11435 ollama pull $model)" 2>/dev/null
+            done
+
+            # Preload all models into memory
+            echo "Preloading models..."
+            for model in "${models[@]}"; do
+                curl -sf -H "X-API-Key: $api_key" -X POST "http://$ip:11434/api/generate" \
+                    -d "{\"model\":\"$model\"}" > /dev/null 2>&1 || true
+            done
+            echo "All models ready."
             return 0
         fi
         sleep 5
