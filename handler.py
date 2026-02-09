@@ -268,12 +268,18 @@ def call_ollama(model: str, messages: List[Dict[str, Any]]) -> str:
         logger.warning("call_ollama", message="OLLAMA_URL not configured")
         return "AI service is not configured. Please contact the administrator."
     logger.info("call_ollama", message=f"Calling Ollama model '{model}'", context_length=len(messages))
+    headers = {"X-API-Key": OLLAMA_API_KEY} if OLLAMA_API_KEY else {}
+    # Quick health check (3s) — fail fast if instance is down
+    try:
+        requests.get(f"{OLLAMA_URL}/api/tags", headers=headers, timeout=3)
+    except Exception:
+        logger.warning("call_ollama", message="Health check failed — instance likely down")
+        return "AI service is unreachable (instance may be stopped). Use /status to check."
     payload = {
         "model": model,
         "messages": messages,
         "stream": False
     }
-    headers = {"X-API-Key": OLLAMA_API_KEY} if OLLAMA_API_KEY else {}
     for attempt in range(2):
         start = time.time()
         try:
