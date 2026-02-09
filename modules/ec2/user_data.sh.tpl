@@ -16,6 +16,7 @@ cat > /etc/systemd/system/ollama.service.d/override.conf << 'CONF'
 [Service]
 Environment="OLLAMA_HOST=127.0.0.1:11435"
 Environment="OLLAMA_NOHISTORY=true"
+Environment="OLLAMA_KEEP_ALIVE=24h"
 CONF
 
 systemctl daemon-reload
@@ -79,6 +80,14 @@ if ! ollama list 2>/dev/null | grep -q "${ollama_model}"; then
   echo "Pulling model: ${ollama_model}"
   OLLAMA_HOST="127.0.0.1:11435" ollama pull ${ollama_model}
 fi
+
+# Preload all installed models into memory so first request is fast
+echo "Preloading all models..."
+for model in $(OLLAMA_HOST=127.0.0.1:11435 ollama list 2>/dev/null | tail -n +2 | awk '{print $1}'); do
+  echo "Preloading: $model"
+  curl -sf -X POST http://127.0.0.1:11435/api/generate -d "{\"model\":\"$model\"}" > /dev/null 2>&1 || true
+done
+echo "All models preloaded"
 
 # Sync models to S3 after pull
 if [ -n "$S3_BUCKET" ]; then
