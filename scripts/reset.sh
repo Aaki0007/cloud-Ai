@@ -26,6 +26,10 @@ echo ""
 # CLEAN UP OLD DEPLOYMENT
 ###############################################
 
+# Stop Ollama EC2 instance first (must be stopped before terraform destroy)
+echo "Stopping Ollama EC2 instance..."
+"$SCRIPT_DIR/manage-ollama.sh" stop 2>/dev/null || echo "  Instance not running (skipping)"
+
 # Delete CloudWatch Log Group (ignore if doesn't exist)
 echo "Removing CloudWatch Log Group..."
 aws logs delete-log-group --log-group-name "$LOG_GROUP" 2>/dev/null && echo "  Deleted log group" || echo "  Log group doesn't exist (skipping)"
@@ -105,6 +109,14 @@ terraform apply -auto-approve
 echo ""
 echo "Setting up Telegram webhook..."
 "$SCRIPT_DIR/setup-webhook.sh"
+
+###############################################
+# START OLLAMA EC2
+###############################################
+
+echo ""
+echo "Starting Ollama EC2 instance..."
+"$SCRIPT_DIR/manage-ollama.sh" start
 
 echo ""
 echo "==========================================="
