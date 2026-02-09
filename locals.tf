@@ -27,4 +27,9 @@ locals {
   # Lambda configuration
   lambda_runtime = "python3.9"
   lambda_handler = "handler.lambda_handler"
+
+  # EC2 / Ollama
+  ec2_instance_name = "${local.project_name}-ollama"
+  ec2_sg_name       = "${local.project_name}-ollama-sg"
+  models_s3_prefix  = "ollama-models"
 }

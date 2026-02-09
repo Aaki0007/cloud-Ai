@@ -1,6 +1,7 @@
 # Terraform files
 *.tfstate
 *.tfstate.*
+*.tfvars
 .terraform/
 .terraform.lock.hcl
 .env.tfvars
@@ -28,3 +29,14 @@ package/
 
 # lambda
 lambda_function.zip
+lambda.zip
+*.zip
+
+# SSH keys and certificates
+*.pem
+*.key
+*.crt
+
+# Secrets
+.env
+*.secret

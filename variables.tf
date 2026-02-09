@@ -54,5 +54,33 @@ variable "lambda_memory_size" {
 variable "lambda_timeout" {
   description = "Lambda function timeout in seconds"
   type        = number
-  default     = 30
+  default     = 60
+}
+
+##########################
+# EC2 / Ollama Variables
+##########################
+
+variable "ec2_instance_type" {
+  description = "EC2 instance type for Ollama server"
+  type        = string
+  default     = "t3.large"
+}
+
+variable "ec2_key_pair_name" {
+  description = "EC2 key pair name for SSH access (empty = no SSH)"
+  type        = string
+  default     = ""
+}
+
+variable "ollama_model" {
+  description = "Ollama model to pull on first boot"
+  type        = string
+  default     = "llama3.2:1b"
+}
+
+variable "ssh_allowed_cidr" {
+  description = "CIDR block allowed for SSH access to Ollama instance"
+  type        = string
+  default     = "0.0.0.0/0"
 }

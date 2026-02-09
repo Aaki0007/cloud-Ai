@@ -49,6 +49,7 @@ output "lambda_log_group" {
 output "api_gateway_url" {
   value       = module.api_gateway.webhook_url
   description = "API Gateway URL for Telegram webhook"
+  sensitive   = true
 }
 
 output "api_gateway_id" {
@@ -59,7 +60,7 @@ output "api_gateway_id" {
 output "webhook_setup_command" {
   value       = "curl 'https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook?url=${module.api_gateway.webhook_url}'"
   description = "Command to set up Telegram webhook (replace <YOUR_TOKEN>)"
-  sensitive   = false
+  sensitive   = true
 }
 
 # Monitoring Outputs
@@ -71,4 +72,22 @@ output "error_alarm_name" {
 output "error_metric_filter" {
   value       = module.monitoring.metric_filter_name
   description = "Metric filter capturing ERROR level logs"
+}
+
+# EC2 Ollama Outputs
+output "ollama_instance_id" {
+  value       = module.ec2_ollama.instance_id
+  description = "EC2 instance ID for the Ollama server"
+}
+
+output "ollama_public_ip" {
+  value       = module.ec2_ollama.public_ip
+  description = "Elastic IP of the Ollama server"
+  sensitive   = true
+}
+
+output "ollama_url" {
+  value       = module.ec2_ollama.ollama_url
+  description = "Ollama API endpoint URL"
+  sensitive   = true
 }
