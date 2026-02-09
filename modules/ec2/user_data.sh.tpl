@@ -15,6 +15,7 @@ mkdir -p /etc/systemd/system/ollama.service.d
 cat > /etc/systemd/system/ollama.service.d/override.conf << 'CONF'
 [Service]
 Environment="OLLAMA_HOST=127.0.0.1:11435"
+Environment="OLLAMA_NOHISTORY=true"
 CONF
 
 systemctl daemon-reload
