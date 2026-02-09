@@ -213,7 +213,7 @@ def get_active_session(user_id: int) -> Optional[Dict[str, Any]]:
     return None
 
 
-def create_session(user_id: int, model_name: str = "tinyllama") -> Dict[str, Any]:
+def create_session(user_id: int, model_name: str = "llama3.2:1b") -> Dict[str, Any]:
     """Create a new session, deactivate old active ones."""
     session_id = str(uuid.uuid4())
     sk = f"MODEL#{model_name}#SESSION#{session_id}"
@@ -263,7 +263,7 @@ def append_to_conversation(session: Dict[str, Any], message_dict: Dict[str, Any]
 
 
 def call_ollama(model: str, messages: List[Dict[str, Any]]) -> str:
-    """Call Ollama API for chat completion."""
+    """Call Ollama API for chat completion. Retries once only on fast connection errors."""
     if not OLLAMA_URL:
         logger.warning("call_ollama", message="OLLAMA_URL not configured")
         return "AI service is not configured. Please contact the administrator."
@@ -274,19 +274,32 @@ def call_ollama(model: str, messages: List[Dict[str, Any]]) -> str:
         "stream": False
     }
     headers = {"X-API-Key": OLLAMA_API_KEY} if OLLAMA_API_KEY else {}
-    try:
-        resp = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, headers=headers, timeout=45)
-        if resp.status_code == 200:
-            data = resp.json()
-            response_content = data['message']['content']
-            logger.info("call_ollama", message=f"Response length {len(response_content)} chars")
-            return response_content
-        else:
-            logger.error("call_ollama", message=f"Ollama API error: HTTP {resp.status_code}")
+    for attempt in range(2):
+        start = time.time()
+        try:
+            resp = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, headers=headers, timeout=22)
+            if resp.status_code == 200:
+                data = resp.json()
+                response_content = data['message']['content']
+                logger.info("call_ollama", message=f"Response length {len(response_content)} chars")
+                return response_content
+            else:
+                elapsed = time.time() - start
+                logger.error("call_ollama", message=f"Ollama API error: HTTP {resp.status_code}, attempt {attempt+1}")
+                # Only retry if failure was fast (connection issue, not slow inference)
+                if attempt == 0 and elapsed < 5:
+                    time.sleep(1)
+                    continue
+                return "Sorry, AI response unavailable. Use /status to check connection."
+        except Exception as e:
+            elapsed = time.time() - start
+            logger.error("call_ollama", message=f"Ollama connection error, attempt {attempt+1}", error=e)
+            # Only retry if failure was fast (connection refused, not timeout)
+            if attempt == 0 and elapsed < 5:
+                time.sleep(1)
+                continue
             return "Sorry, AI response unavailable. Use /status to check connection."
-    except Exception as e:
-        logger.error("call_ollama", message="Ollama connection error", error=e)
-        return "Sorry, AI response unavailable. Use /status to check connection."
+    return "Sorry, AI response unavailable. Use /status to check connection."
 
 
 # ==================== ARCHIVE FUNCTIONS ====================
@@ -426,20 +439,33 @@ def import_archive_to_s3(user_id: int, archive_data: Dict[str, Any]) -> Optional
 
 # ==================== COMMAND HANDLERS ====================
 
+AVAILABLE_MODELS = [
+    {"id": "llama3.2:1b", "name": "Llama 3.2", "desc": "Meta's latest, fast (1B)"},
+    {"id": "qwen2.5:1.5b-instruct-q4_K_M", "name": "Qwen 2.5", "desc": "Instruction-tuned (1.5B)"},
+]
+
+def format_model_list() -> str:
+    """Format available models as a numbered list."""
+    lines = []
+    for i, m in enumerate(AVAILABLE_MODELS):
+        lines.append(f"{i+1}. {m['name']} - {m['desc']}")
+    return "\n".join(lines)
+
 def handle_command(cmd: str, payload: str, chat_id: int, user_id: int, update_id: int) -> str:
     """Handle bot commands."""
     logger.info("handle_command", message=f"Command: {cmd}", command=cmd)
 
     if cmd == "/start" or cmd == "/hello":
         session = get_current_session(user_id)
-        resp = f"Hello! Your current model is {session['model_name']}. Chat away or use /help."
+        resp = f"Hello! Your current model is {session['model_name']}.\n\nAvailable models:\n{format_model_list()}\n\nUse /newsession <number> to start a session with a specific model.\nChat away or use /help."
         send_message(chat_id, resp)
         return "start_or_hello"
 
     if cmd == "/help":
-        resp = """Commands:
-/start or /hello - Greeting and session init
-/newsession - Start a new chat session
+        resp = f"""Commands:
+/start or /hello - Greeting and session info
+/newsession - Show available models
+/newsession <number> - Start session with chosen model
 /listsessions - List your sessions
 /switch <number> - Switch to a session (e.g., /switch 1)
 /history - Show recent messages in current session
@@ -452,6 +478,9 @@ Archive Commands:
 /listarchives - List your archived sessions
 /export <number> - Export an archive as a file
 (Send a JSON file to import an archive)
+
+Available models:
+{format_model_list()}
 
 Send any text message to chat with the AI model."""
         send_message(chat_id, resp)
@@ -475,10 +504,27 @@ Send any text message to chat with the AI model."""
         return "status"
 
     if cmd == "/newsession":
-        new_session = create_session(user_id)
-        resp = f"New session created with model '{new_session['model_name']}' (ID: {new_session['session_id'][:8]})."
-        send_message(chat_id, resp)
-        return "newsession"
+        if not payload.strip():
+            resp = f"Choose a model for your new session:\n{format_model_list()}\n\nUsage: /newsession <number> (e.g., /newsession 1)"
+            send_message(chat_id, resp)
+            return "newsession_list"
+        try:
+            idx = int(payload.strip()) - 1
+            if 0 <= idx < len(AVAILABLE_MODELS):
+                model_id = AVAILABLE_MODELS[idx]["id"]
+                model_name_display = AVAILABLE_MODELS[idx]["name"]
+                new_session = create_session(user_id, model_name=model_id)
+                resp = f"New session created with {model_name_display} ({model_id}).\nSession ID: {new_session['session_id'][:8]}"
+                send_message(chat_id, resp)
+                return "newsession"
+            else:
+                resp = f"Invalid choice. Available models:\n{format_model_list()}\n\nUsage: /newsession <number>"
+                send_message(chat_id, resp)
+                return "invalid_newsession"
+        except ValueError:
+            resp = f"Invalid choice. Available models:\n{format_model_list()}\n\nUsage: /newsession <number>"
+            send_message(chat_id, resp)
+            return "invalid_newsession"
 
     if cmd == "/listsessions":
         items = get_user_items(user_id)
@@ -711,7 +757,7 @@ def handle_document(document: Dict[str, Any], chat_id: int, user_id: int) -> str
     return "imported"
 
 
-def handle_message(text: str, chat_id: int, user_id: int, update_id: int, document: Optional[Dict[str, Any]] = None) -> str:
+def handle_message(text: str, chat_id: int, user_id: int, update_id: int, document: Optional[Dict[str, Any]] = None, thinking_msg_id: Optional[int] = None) -> str:
     """Handle incoming messages: commands, chat, or documents."""
 
     if document:
@@ -742,10 +788,25 @@ def handle_message(text: str, chat_id: int, user_id: int, update_id: int, docume
         session = get_current_session(user_id)
         now = int(time.time())
 
+        # Check if session's model is still available
+        available_model_ids = {m["id"] for m in AVAILABLE_MODELS}
+        session_model = session.get("model_name", "")
+        if session_model not in available_model_ids:
+            available_list = format_model_list()
+            warn_msg = f"The model '{session_model}' is no longer available.\n\nPlease create a new session with an available model:\n{available_list}\n\nUsage: /newsession <number>"
+            if thinking_msg_id:
+                edit_message(chat_id, thinking_msg_id, warn_msg)
+            else:
+                send_message(chat_id, warn_msg)
+            return "model_unavailable"
+
         # Check if a request is already being processed (within last 55 seconds)
         pending_since = session.get("pending_request_ts", 0)
         if pending_since and (now - pending_since) < 55:
-            send_message(chat_id, "Please wait, still generating a response to your previous message...")
+            if thinking_msg_id:
+                edit_message(chat_id, thinking_msg_id, "Please wait, still generating a response to your previous message...")
+            else:
+                send_message(chat_id, "Please wait, still generating a response to your previous message...")
             return "rate_limited"
 
         user_msg = {"role": "user", "content": text, "ts": now}
@@ -755,35 +816,32 @@ def handle_message(text: str, chat_id: int, user_id: int, update_id: int, docume
         session['pending_request_ts'] = now
         table.put_item(Item=session)
 
-        # Send "Thinking..." message so user knows the bot is working
-        thinking_resp = send_message(chat_id, "Thinking...")
-        thinking_msg_id = None
-        if thinking_resp and thinking_resp.get("ok"):
-            thinking_msg_id = thinking_resp["result"]["message_id"]
+        try:
+            # Build conversation context for Ollama (strip ts field, limit to last 10 messages)
+            all_msgs = [
+                {"role": m["role"], "content": m["content"]}
+                for m in session.get("conversation", [])
+                if "role" in m and "content" in m
+            ]
+            messages = all_msgs[-10:]
 
-        # Build conversation context for Ollama (strip ts field, limit to last 10 messages)
-        all_msgs = [
-            {"role": m["role"], "content": m["content"]}
-            for m in session.get("conversation", [])
-            if "role" in m and "content" in m
-        ]
-        messages = all_msgs[-10:]
+            # Call Ollama for AI response
+            model_name = session.get("model_name", "tinyllama")
+            ai_response = call_ollama(model_name, messages)
 
-        # Call Ollama for AI response
-        model_name = session.get("model_name", "tinyllama")
-        ai_response = call_ollama(model_name, messages)
+            ass_msg = {"role": "assistant", "content": ai_response, "ts": int(time.time())}
+            append_to_conversation(session, ass_msg)
 
-        # Clear pending flag
-        session['pending_request_ts'] = 0
-        ass_msg = {"role": "assistant", "content": ai_response, "ts": int(time.time())}
-        append_to_conversation(session, ass_msg)
-
-        # Replace "Thinking..." with the actual response
-        if thinking_msg_id:
-            edit_message(chat_id, thinking_msg_id, ai_response)
-        else:
-            send_message(chat_id, ai_response)
-        return "ai_response"
+            # Replace "Thinking..." with the actual response
+            if thinking_msg_id:
+                edit_message(chat_id, thinking_msg_id, ai_response)
+            else:
+                send_message(chat_id, ai_response)
+            return "ai_response"
+        finally:
+            # Always clear pending flag, even on unexpected errors
+            session['pending_request_ts'] = 0
+            table.put_item(Item=session)
 
 
 def process_telegram_update(update: Dict[str, Any]) -> Dict[str, Any]:
@@ -808,18 +866,32 @@ def process_telegram_update(update: Dict[str, Any]) -> Dict[str, Any]:
         logger.warning("process_update", outcome="skipped", message="No chat_id in update")
         return {"processed": False, "reason": "no_chat_id"}
 
+    # For chat messages (not commands, not documents), send "Thinking..." immediately
+    thinking_msg_id = None
+    if text and not text.strip().startswith('/') and not document:
+        thinking_resp = send_message(chat_id, "Thinking...")
+        if thinking_resp and thinking_resp.get("ok"):
+            thinking_msg_id = thinking_resp["result"]["message_id"]
+
     # Deduplicate: check if this update_id was already processed
     try:
         dedup_resp = table.get_item(Key={'pk': OFFSET_PK, 'sk': f'update#{update_id}'})
         if 'Item' in dedup_resp:
             logger.info("process_update", outcome="skipped", message=f"Duplicate update_id={update_id}")
+            # Delete the "Thinking..." message if we sent one
+            if thinking_msg_id:
+                try:
+                    requests.post(f"{TELEGRAM_API}/deleteMessage",
+                                  json={"chat_id": chat_id, "message_id": thinking_msg_id}, timeout=5)
+                except Exception:
+                    pass
             return {"processed": False, "reason": "duplicate"}
         # Mark this update_id as processed
         table.put_item(Item={'pk': OFFSET_PK, 'sk': f'update#{update_id}', 'ts': int(time.time())})
     except Exception:
         pass  # If dedup check fails, process anyway
 
-    handle_result = handle_message(text, chat_id, user_id, update_id, document)
+    handle_result = handle_message(text, chat_id, user_id, update_id, document, thinking_msg_id)
 
     return {
         "processed": True,

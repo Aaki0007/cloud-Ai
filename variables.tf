@@ -76,7 +76,7 @@ variable "ec2_key_pair_name" {
 variable "ollama_model" {
   description = "Ollama model to pull on first boot"
   type        = string
-  default     = "tinyllama"
+  default     = "llama3.2:1b"
 }
 
 variable "ssh_allowed_cidr" {

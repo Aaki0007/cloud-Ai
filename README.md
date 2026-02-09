@@ -79,7 +79,8 @@ This project creates a serverless Telegram bot running on AWS. When users send m
 |---------|---------|--------|
 | `/start` or `/hello` | Initialize and greet user | ✅ Working |
 | `/help` | Show available commands | ✅ Working |
-| `/newsession` | Create a new chat session | ✅ Working |
+| `/newsession` | Show available models | ✅ Working |
+| `/newsession <number>` | Create session with chosen model | ✅ Working |
 | `/listsessions` | List all user sessions | ✅ Working |
 | `/switch <number>` | Switch to a different session | ✅ Working |
 | `/history` | Show recent messages in session | ✅ Working |
@@ -428,7 +429,7 @@ Creates an EC2 instance running Ollama for AI inference.
 |----------|-------------|---------|
 | `instance_name` | Name tag for the instance | Required |
 | `instance_type` | EC2 instance type | `t3.large` |
-| `ollama_model` | Model to pull on first boot | `tinyllama` |
+| `ollama_model` | Model to pull on first boot | `llama3.2:1b` |
 | `models_s3_bucket` | S3 bucket for model persistence | Required |
 | `ssh_allowed_cidr` | CIDR for SSH access | `0.0.0.0/0` |
 
@@ -448,11 +449,21 @@ The bot integrates with [Ollama](https://ollama.com), a self-hosted large langua
 | Endpoint | `POST http://<EC2_EIP>:11434/api/chat` |
 | Protocol | HTTP (REST) |
 | Authentication | API key via `X-API-Key` header (nginx reverse proxy) |
-| Request format | JSON: `{"model": "tinyllama", "messages": [...], "stream": false}` |
+| Request format | JSON: `{"model": "llama3.2:1b", "messages": [...], "stream": false}` |
 | Response format | JSON: `{"message": {"content": "..."}}` |
 
+**Available Models:**
+
+| # | Model | Description | Size |
+|---|-------|-------------|------|
+| 1 | `llama3.2:1b` | Meta Llama 3.2, fast general-purpose | 1.3 GB |
+| 2 | `qwen2.5:1.5b-instruct-q4_K_M` | Alibaba Qwen 2.5, instruction-tuned | 986 MB |
+
+Users select a model when creating a session via `/newsession <number>`. Sessions using removed models show a warning and prompt the user to create a new session.
+
 **Error Handling:**
-- Connection timeouts (45s) with structured JSON error logging
+- Connection timeouts (22s) with structured JSON error logging
+- Smart retry: retries once only on fast connection errors (< 5s), not on timeouts
 - HTTP status code validation (non-200 responses return user-friendly error)
 - Exception handling with stack traces logged to CloudWatch
 - Graceful fallback: bot remains functional even if Ollama is unreachable
@@ -476,7 +487,37 @@ The bot integrates with [Ollama](https://ollama.com), a self-hosted large langua
 ./scripts/manage-ollama.sh start    # Start instance, wait for Ollama API
 ./scripts/manage-ollama.sh stop     # Stop instance (syncs models to S3)
 ./scripts/manage-ollama.sh status   # Check instance and API health
+./scripts/manage-ollama.sh ssh      # SSH into the instance
 ```
+
+**Managing Models:**
+
+To add a new model, SSH into the EC2 instance and pull it:
+
+```bash
+# SSH into the instance
+./scripts/manage-ollama.sh ssh
+
+# Pull a model (must set OLLAMA_HOST since Ollama binds to port 11435)
+OLLAMA_HOST=http://127.0.0.1:11435 ollama pull <model_name>
+
+# List installed models
+OLLAMA_HOST=http://127.0.0.1:11435 ollama list
+
+# Remove a model
+OLLAMA_HOST=http://127.0.0.1:11435 ollama rm <model_name>
+```
+
+After pulling a new model, add it to the `AVAILABLE_MODELS` list in `handler.py` and redeploy the Lambda:
+
+```bash
+# Rebuild and deploy
+cp handler.py /tmp/lambda-build/handler.py
+cd /tmp/lambda-build && zip -r /path/to/lambda.zip . -x '__pycache__/*' '*.pyc'
+aws lambda update-function-code --function-name telegram-bot --zip-file fileb://lambda.zip
+```
+
+> **Note:** Ollama binds to `127.0.0.1:11435` (not the default 11434) because nginx reverse proxy occupies port 11434 for API key authentication. Always set `OLLAMA_HOST=http://127.0.0.1:11435` when using the `ollama` CLI on the instance.
 
 ---
 

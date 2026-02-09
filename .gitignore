@@ -29,6 +29,8 @@ package/
 
 # lambda
 lambda_function.zip
+lambda.zip
+*.zip
 
 # SSH keys and certificates
 *.pem
